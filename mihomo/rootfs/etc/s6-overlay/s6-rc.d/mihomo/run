@@ -120,7 +120,6 @@ EOF2
     # Стандартные группы: PROXY (ручной выбор) -> AUTO (url-test, автоселект
     # самого быстрого по пингу). FASTEST и прочая автоматика не используются.
     yq -i '.proxy-groups = ((.proxy-groups // []) | map(select(((.name == "PROXY" and .include-all == true) or (.name == "AUTO" and .type == "url-test") or .name == "SPEEDTEST" or .name == "FASTEST") | not)))' "${CONFIG_FILE}"
-        yq -i '.proxy-groups = ((.proxy-groups // []) | map(select(((.name == "PROXY" and .include-all == true) or (.name == "AUTO" and .type == "url-test") or .name == "SPEEDTEST" or .name == "FASTEST") | not)))'
     yq -i ".proxy-groups = [{\"name\": \"PROXY\", \"type\": \"select\", \"proxies\": [\"AUTO\"], \"include-all\": true}, {\"name\": \"AUTO\", \"type\": \"url-test\", \"include-all\": true, \"url\": \"${HC_URL}\", \"interval\": 300, \"tolerance\": 100, \"timeout\": 5000, \"max-failed-times\": 5}] + .proxy-groups" "${CONFIG_FILE}"
     yq -i '(.rules[] | select(. == "MATCH,DIRECT")) = "MATCH,PROXY"' "${CONFIG_FILE}"
     if [ "$(yq '.rules // [] | length' "${CONFIG_FILE}")" -eq 0 ]; then
@@ -135,7 +134,7 @@ else
     # Подписок/VPN не осталось: снимаем наши автогруппы, возвращаем прямую маршрутизацию
     if yq -e '.proxy-groups[]? | select(.name == "PROXY" and .include-all == true)' "${CONFIG_FILE}" >/dev/null 2>&1; then
         yq -i '.proxy-groups |= map(select(((.name == "PROXY" and .include-all == true) or (.name == "AUTO" and .type == "url-test") or .name == "SPEEDTEST" or .name == "FASTEST") | not))' "${CONFIG_FILE}"
-        yq -i '.listeners = ((.listeners // []) | map(select(.name != "speedtest")))' "${CONFIG_FILE}" "${CONFIG_FILE}"
+        yq -i '.listeners = ((.listeners // []) | map(select(.name != "speedtest")))' "${CONFIG_FILE}"
         yq -i '(.rules[] | select(. == "MATCH,PROXY")) = "MATCH,DIRECT"' "${CONFIG_FILE}"
         if [ "$(yq '.proxy-groups // [] | length' "${CONFIG_FILE}")" -eq 0 ]; then
             yq -i 'del(.proxy-groups)' "${CONFIG_FILE}"
