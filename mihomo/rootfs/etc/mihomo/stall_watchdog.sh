@@ -1,8 +1,9 @@
 #!/command/with-contenv bashio
 # ==============================================================================
 # Сторож «зависшего» трафика для mihomo.
-# Пока есть активные подключения, но суммарный трафик не растёт
-# stall_timeout секунд подряд — тест скорости кандидатов группы PROXY
+# Пока есть активные подключения, но входящий (download) трафик
+# не растёт stall_timeout секунд подряд (upload не учитывается) —
+# тест скорости кандидатов группы PROXY
 # через mixed-порт и переключение на первый узел, дотягивающий
 # до stall_min_speed КБ/с (0 — всегда брать самого быстрого).
 #
@@ -126,7 +127,7 @@ while true; do
 
     conn_json=$(api_get "/connections") || { STALL_COUNT=0; continue; }
 
-    now_total=$(printf '%s' "$conn_json" | sed -n 's/.*"downloadTotal":\([0-9]*\),"uploadTotal":\([0-9]*\).*/\1\2/p')
+    now_total=$(printf '%s' "$conn_json" | sed -n 's/.*"downloadTotal":\([0-9]*\).*/\1/p')
     [ -n "$now_total" ] || { STALL_COUNT=0; continue; }
 
     nconn=$(printf '%s' "$conn_json" | grep -o '"id"' | wc -l)
@@ -144,7 +145,7 @@ while true; do
     fi
     STALL_COUNT=0
 
-    bashio::log.warning "Трафик стоит ${STALL_TIMEOUT}s при $nconn подключениях — тест скорости узлов"
+    bashio::log.warning "Входящий трафик (download) стоит ${STALL_TIMEOUT}s при $nconn подключениях — тест скорости узлов"
 
     # кандидаты: узлы группы PROXY
     nodes=$(api_get "/proxies/PROXY" 2>/dev/null | sed -n 's/.*"all":\[\(.*\)\],"now".*/\1/p' | tr -d '"' | tr ',' '\n') || nodes=""
