@@ -66,6 +66,14 @@ API_PORT="${API_PORT//[^0-9]/}"
 [ -n "$API_PORT" ] || API_PORT=9090
 API="http://${API_HOST}:${API_PORT}"
 
+# секрет REST API (если задан в конфиге) — без него все запросы вернут 401 молча
+API_SECRET="$(yq -r '.secret // ""' "${CONFIG_FILE}" 2>/dev/null || true)"
+if [ -n "$API_SECRET" ]; then
+    CURL_AUTH=(-H "Authorization: Bearer ${API_SECRET}")
+else
+    CURL_AUTH=()
+fi
+
 # Кэш результатов замеров скорости: файл «speed|timestamp|node».
 # Позволяет при повторном срабатывании не тратить время на спринт по узлам:
 # кандидат из кэша сначала быстро перепроверяется, и только если он до сих
@@ -86,7 +94,7 @@ bashio::log.info "Сторож простоя запущен: timeout=${STALL_TI
 STALL_COUNT=0
 LAST_TOTAL=""
 
-api_get() { curl -fsS --max-time 5 "$API$1" 2>/dev/null; }
+api_get() { curl -fsS --max-time 5 "${CURL_AUTH[@]}" "$API$1" 2>/dev/null; }
 
 # Скорость узла в байт/с через mixed-порт (0 = не смог).
 # Если MIN_SPEED_KB > 0 и EARLY_SAMPLE > 0: через EARLY_SAMPLE секунд
@@ -95,7 +103,7 @@ api_get() { curl -fsS --max-time 5 "$API$1" 2>/dev/null; }
 measure_node() {
     local node="$1" out pid size elapsed projected
     # переключаем PROXY на узел и качаем тестовый файл
-    if ! curl -fsS --max-time 5 -X PUT "$API/proxies/PROXY" \
+    if ! curl -fsS --max-time 5 "${CURL_AUTH[@]}" -X PUT "$API/proxies/PROXY" \
         -d "{\"name\":\"$node\"}" >/dev/null 2>&1; then
         bashio::log.warning "Не удалось переключиться на $node — скорость 0"
         echo 0; return
@@ -193,8 +201,8 @@ cache_prune() {
 
 switch_and_retest() {
     local node="$1"
-    curl -fsS --max-time 5 -X PUT "$API/proxies/PROXY" -d "{\"name\":\"$node\"}" >/dev/null 2>&1 || true
-    curl -fsS --max-time 30 "$API/group/AUTO/delay?url=$(printf '%s' 'https://www.gstatic.com/generate_204' | sed 's/:/%3A/; s@/@%2Fg')" >/dev/null 2>&1 || true
+    curl -fsS --max-time 5 "${CURL_AUTH[@]}" -X PUT "$API/proxies/PROXY" -d "{\"name\":\"$node\"}" >/dev/null 2>&1 || true
+    curl -fsS --max-time 30 "${CURL_AUTH[@]}" "$API/group/AUTO/delay?url=$(printf '%s' 'https://www.gstatic.com/generate_204' | sed 's/:/%3A/; s@/@%2Fg')" >/dev/null 2>&1 || true
 }
 
 is_group_name() {
@@ -209,10 +217,14 @@ while true; do
 
     conn_json=$(api_get "/connections") || { STALL_COUNT=0; continue; }
 
-    now_total=$(printf '%s' "$conn_json" | sed -n 's/.*"downloadTotal":\([0-9]*\).*/\1/p')
-    [ -n "$now_total" ] || { STALL_COUNT=0; continue; }
+    # считаем входящий только по подключениям, идущим через прокси
+    # (последний элемент chains не DIRECT): прямые соединения — например,
+    # правило GEOIP,RU — не должны маскировать зависший прокси-узел
+    now_total=$(printf '%s' "$conn_json" | jq -r '[.connections[]? | select((.chains | last) != "DIRECT") | .download] | add // 0' 2>/dev/null)
+    case "$now_total" in ''|*[!0-9]*) { STALL_COUNT=0; continue; } ;; esac
 
-    nconn=$(printf '%s' "$conn_json" | grep -o '"id"' | wc -l)
+    nconn=$(printf '%s' "$conn_json" | jq -r '[.connections[]? | select((.chains | last) != "DIRECT")] | length' 2>/dev/null)
+    case "$nconn" in ''|*[!0-9]*) { STALL_COUNT=0; continue; } ;; esac
     [ "$nconn" -gt 0 ] 2>/dev/null || { STALL_COUNT=0; continue; }
 
     if [ -z "$LAST_TOTAL" ]; then
@@ -237,13 +249,13 @@ while true; do
     fi
     STALL_COUNT=0
 
-    bashio::log.warning "Входящий трафик (download) стоит ${STALL_TIMEOUT}s при $nconn подключениях — тест скорости узлов"
+    bashio::log.warning "Входящий трафик (download) стоит ${STALL_TIMEOUT}s при $nconn прокси-подключениях — тест скорости узлов"
 
     # кандидаты: узлы группы PROXY
-    nodes=$(api_get "/proxies/PROXY" 2>/dev/null | sed -n 's/.*"all":\[\(.*\)\],"now".*/\1/p' | tr -d '"' | tr ',' '\n') || nodes=""
-    [ -n "$nodes" ] || { bashio::log.warning "Список кандидатов пуст"; continue; }
-
-    cur=$(api_get "/proxies/PROXY" 2>/dev/null | sed -n 's/.*"now":"\([^"]*\)".*/\1/p')
+    group_json=$(api_get "/proxies/PROXY" 2>/dev/null || true)
+    nodes=$(printf '%s' "$group_json" | jq -r '.proxies.PROXY.all // [] | .[]' 2>/dev/null)
+    cur=$(printf '%s' "$group_json" | jq -r '.proxies.PROXY.now // ""' 2>/dev/null)
+    [ -n "$nodes" ] || { bashio::log.warning "Список кандидатов пуст (не удалось прочитать группу PROXY)"; continue; }
 
     # Быстрый путь: в кэше есть свежий подходящий узел — сначала быстрый замер
     # (ранний выход делает его дешёвым). Переключение «вслепую» убрано: без
@@ -271,8 +283,8 @@ while true; do
     # запись лучше случайного порядка) — спринт заканчивается раньше
     nodes_sorted=$(while IFS= read -r n; do
         [ -n "$n" ] || continue
-        printf '%s %s\n' "$(cache_get_speed "$n")" "$n"
-    done <<< "$nodes" | sort -rn | awk '{print $2}')
+        printf '%s\t%s\n' "$(cache_get_speed "$n")" "$n"
+    done <<< "$nodes" | sort -t$'\t' -rn -k1,1 | cut -f2-)
     [ -n "$nodes_sorted" ] || nodes_sorted="$nodes"
 
     while IFS= read -r node; do
