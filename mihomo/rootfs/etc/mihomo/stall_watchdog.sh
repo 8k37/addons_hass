@@ -77,6 +77,13 @@ else
     CURL_AUTH=()
 fi
 
+# Имя группы-селектора, которой управляет сторож. В стандартной конфигурации
+# это PROXY (создаётся в run). Если конфиг переименовал группу или её нет —
+# /proxies/PROXY вернёт 404, и сторож будет считать список пустым, хотя в
+# панели узлы есть. Поэтому имя берём из конфига (первая select-группа).
+GROUP_NAME="$(yq -r '(.proxy-groups // [])[] | select(.type == "select") | .name' "${CONFIG_FILE}" 2>/dev/null | head -n1)"
+[ -n "$GROUP_NAME" ] || GROUP_NAME=PROXY
+
 # Кэш результатов замеров скорости: файл «speed|timestamp|node».
 # Позволяет при повторном срабатывании не тратить время на спринт по узлам:
 # кандидат из кэша сначала быстро перепроверяется, и только если он до сих
@@ -134,6 +141,24 @@ LAST_TOTAL=""
 
 api_get() { curl -fsS --max-time 5 "${CURL_AUTH[@]}" "$API$1" 2>/dev/null; }
 
+# Читает группу GROUP_NAME через API. Пустой результат — API не ответил
+# (порт/секрет) или группы нет (404). В обоих случаях отличаем это от
+# «группа есть, но реально пуста»: перекачивать подписку при мёртвом API
+# бессмысленно, а при переименованной группе — пробуем найти селектор в API.
+api_group_read() {
+    local g alt
+    g=$(api_get "/proxies/${GROUP_NAME}" 2>/dev/null) || true
+    if [ -z "$g" ]; then
+        alt=$(api_get "/proxies" 2>/dev/null | jq -r '[.proxies | to_entries[] | select(.value.type == "Selector" and .key != "GLOBAL")][0].key // ""' 2>/dev/null)
+        if [ -n "$alt" ] && [ "$alt" != "$GROUP_NAME" ]; then
+            bashio::log.warning "Группа «${GROUP_NAME}» не найдена в API — использую селектор «${alt}»"
+            GROUP_NAME="$alt"
+            g=$(api_get "/proxies/${GROUP_NAME}" 2>/dev/null) || true
+        fi
+    fi
+    printf '%s' "$g"
+}
+
 # Скорость узла в байт/с через mixed-порт (0 = не смог).
 # Если MIN_SPEED_KB > 0 и EARLY_SAMPLE > 0: через EARLY_SAMPLE секунд
 # считается прогноз (байты/прошедшее время); если прогноз уже >= порога —
@@ -141,7 +166,7 @@ api_get() { curl -fsS --max-time 5 "${CURL_AUTH[@]}" "$API$1" 2>/dev/null; }
 measure_node() {
     local node="$1" out pid size elapsed projected
     # переключаем PROXY на узел и качаем тестовый файл
-    if ! curl -fsS --max-time 5 "${CURL_AUTH[@]}" -X PUT "$API/proxies/PROXY" \
+    if ! curl -fsS --max-time 5 "${CURL_AUTH[@]}" -X PUT "$API/proxies/${GROUP_NAME}" \
         -d "{\"name\":\"$node\"}" >/dev/null 2>&1; then
         bashio::log.warning "Не удалось переключиться на $node — скорость 0"
         echo 0; return
@@ -239,7 +264,7 @@ cache_prune() {
 
 switch_and_retest() {
     local node="$1"
-    curl -fsS --max-time 5 "${CURL_AUTH[@]}" -X PUT "$API/proxies/PROXY" -d "{\"name\":\"$node\"}" >/dev/null 2>&1 || true
+    curl -fsS --max-time 5 "${CURL_AUTH[@]}" -X PUT "$API/proxies/${GROUP_NAME}" -d "{\"name\":\"$node\"}" >/dev/null 2>&1 || true
     curl -fsS --max-time 30 "${CURL_AUTH[@]}" "$API/group/AUTO/delay?url=$(printf '%s' 'https://www.gstatic.com/generate_204' | sed 's/:/%3A/; s@/@%2Fg')" >/dev/null 2>&1 || true
 }
 
@@ -316,8 +341,8 @@ sub_recover() {
     sleep 10   # дать mihomo скачать и применить подписку
 
     local g cnt
-    g=$(api_get "/proxies/PROXY" 2>/dev/null || true)
-    cnt=$(printf '%s' "$g" | jq -r '.proxies.PROXY.all // [] | length' 2>/dev/null)
+    g=$(api_group_read)
+    cnt=$(printf '%s' "$g" | jq -r --arg n "$GROUP_NAME" '.proxies[$n].all // [] | length' 2>/dev/null)
     case "$cnt" in ''|*[!0-9]*) cnt=0;; esac
     if [ "$cnt" -gt 0 ]; then
         bashio::log.info "Подписка восстановлена: в PROXY ${cnt} узлов"
@@ -380,10 +405,14 @@ while true; do
     bashio::log.warning "Входящий трафик (download) стоит ${STALL_TIMEOUT}s при $nconn прокси-подключениях — тест скорости узлов"
 
     # PROXY пуст (подписка умерла/отдала пустой список) — пробуем перекачать
-    sub_nodes=$(printf '%s' "$nodes" 2>/dev/null)
-    group_json=$(api_get "/proxies/PROXY" 2>/dev/null || true)
-    nodes=$(printf '%s' "$group_json" | jq -r '.proxies.PROXY.all // [] | .[]' 2>/dev/null)
-    cur=$(printf '%s' "$group_json" | jq -r '.proxies.PROXY.now // ""' 2>/dev/null)
+    group_json=$(api_group_read)
+    if [ -z "$group_json" ]; then
+        bashio::log.warning "API не ответил на /proxies/${GROUP_NAME} (порт/секрет?) — пропускаю цикл"
+        LAST_TOTAL=""
+        continue
+    fi
+    nodes=$(printf '%s' "$group_json" | jq -r --arg n "$GROUP_NAME" '.proxies[$n].all // [] | .[]' 2>/dev/null)
+    cur=$(printf '%s' "$group_json" | jq -r --arg n "$GROUP_NAME" '.proxies[$n].now // ""' 2>/dev/null)
     [ -n "$nodes" ] || {
         bashio::log.warning "В группе PROXY нет ни одного узла — запускаю проверку/обновление подписки"
         sub_recover
@@ -409,9 +438,10 @@ while true; do
     fi
 
     # кандидаты: узлы группы PROXY
-    group_json=$(api_get "/proxies/PROXY" 2>/dev/null || true)
-    nodes=$(printf '%s' "$group_json" | jq -r '.proxies.PROXY.all // [] | .[]' 2>/dev/null)
-    cur=$(printf '%s' "$group_json" | jq -r '.proxies.PROXY.now // ""' 2>/dev/null)
+    group_json=$(api_group_read)
+    [ -n "$group_json" ] || { bashio::log.warning "API не ответил на /proxies/${GROUP_NAME} — пропускаю цикл"; LAST_TOTAL=""; continue; }
+    nodes=$(printf '%s' "$group_json" | jq -r --arg n "$GROUP_NAME" '.proxies[$n].all // [] | .[]' 2>/dev/null)
+    cur=$(printf '%s' "$group_json" | jq -r --arg n "$GROUP_NAME" '.proxies[$n].now // ""' 2>/dev/null)
     [ -n "$nodes" ] || { bashio::log.warning "Список кандидатов пуст (не удалось прочитать группу PROXY)"; continue; }
 
     # Быстрый путь: в кэше есть свежий подходящий узел — сначала быстрый замер
