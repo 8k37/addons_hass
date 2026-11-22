@@ -489,22 +489,29 @@ def main():
                 speed = measure_node(cached)
                 cache[cached] = (speed, int(time.time()))
                 if speed >= MIN_SPEED_BPS:
+                    log("INFO", "Тест скорости (кэш): %s — %d байт/с" % (cached, speed))
                     log("INFO", "Кэш: %s подтвержден (%d байт/с) — переключаюсь" % (cached, speed))
                     switch_and_retest(cached)
                     state_write(0, recent)
                     continue
+                log("INFO", "Тест скорости (кэш): %s — %d байт/с" % (cached, speed))
                 log("WARNING", "Кэш: %s больше не дотягивает (%d байт/с) — удаляю из кэша, полный спринт"
                     % (cached, speed))
                 cache.pop(cached, None)
 
         # порядок теста: сначала узлы, которые по кэшу были быстрыми
-        order = sorted(nodes, key=lambda n: -cache.get(n, (0, 0))[0])
+        order = [n for n in nodes if n and n not in GROUP_NAMES and n != cur]
+        log("INFO", "Запуск теста скорости: %d кандидат(ов)" % len(order))
+        order = sorted(order, key=lambda n: -cache.get(n, (0, 0))[0])
         best_node, best_speed, chosen = "", 0, ""
         for node in order:
             if not node or node in GROUP_NAMES or node == cur:
                 continue
             speed = measure_node(node)
             log("INFO", "Тест скорости: %s — %d байт/с" % (node, speed))
+            if MIN_SPEED_BPS > 0:
+                log("INFO", "Результат: %s %s порога %d байт/с"
+                    % (node, "прошел" if speed >= MIN_SPEED_BPS else "ниже", MIN_SPEED_BPS))
             cache[node] = (speed, int(time.time()))
             if speed > best_speed:
                 best_speed, best_node = speed, node
