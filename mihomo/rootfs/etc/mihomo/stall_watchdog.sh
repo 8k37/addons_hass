@@ -9,6 +9,10 @@
 API="http://127.0.0.1:9090"
 TIMEOUT="${STALL_TIMEOUT:-10}"
 HC_URL="${HC_URL:-https://www.gstatic.com/generate_204}"
+# URL для замера РЕАЛЬНОЙ скорости (файл, который можно скачать через узел)
+SPEED_URL="${SPEED_URL:-https://speed.cloudflare.com/__down?bytes=2000000}"
+# локальный порт mihomo, через который гоняется тестовая закачка
+PROXY_PORT="${PROXY_PORT:-7890}"
 
 # секрет внешнего контроллера, если задан в конфиге
 SECRET="$(yq '.secret // ""' "${CONFIG_FILE}" 2>/dev/null || echo "")"
@@ -25,7 +29,7 @@ until curl -sf --max-time 3 "${auth[@]}" "${API}/version" >/dev/null 2>&1; do
     [ "${i}" -gt 120 ] && exit 0
     sleep 1
 done
-bashio::log.info "Сторож трафика работает (порог: ${TIMEOUT} с без данных при активных подключениях)."
+bashio::log.info "Сторож трафика работает (порог: ${TIMEOUT} с без данных при активных подключениях; выбор узла — по скорости закачки через ${SPEED_URL})."
 
 LAST_TOTAL="-1"
 STALL=0
@@ -61,40 +65,58 @@ while true; do
     LAST_TOTAL="-1"
     bashio::log.warning "Подключений: ${NCOUNT}, но трафика нет ${TIMEOUT} с — меняю узел."
 
+    # Готовим кандидатов и тестируем РЕАЛЬНУЮ СКОРОСТЬ каждого: узел
+    # временно становится активным в PROXY, через mixed-порт качается
+    # тестовый файл, меряется скорость скачивания. Оставляем самый быстрый.
     PROXIES="$(curl -sf --max-time 3 "${auth[@]}" "${API}/proxies" 2>/dev/null || true)"
     [ -z "${PROXIES}" ] && continue
-    CUR="$(jq -r '.proxies.PROXY.now // empty' <<<"${PROXIES}")"
-    [ -z "${CUR}" ] && continue
 
     # группы (AUTO и пр.) выбирать как узел нельзя
     GROUPS="$(jq -r '[.proxies[] | select(.all != null) | .name] | .[]' <<<"${PROXIES}" 2>/dev/null || true)"
     CANDIDATES="$(jq -r '.proxies.PROXY.all[]' <<<"${PROXIES}" 2>/dev/null \
-        | grep -vxF -e DIRECT -e REJECT -e "${CUR}" -f <(printf '%s\n' "${GROUPS}") || true)"
+        | grep -vxF -e DIRECT -e REJECT -f <(printf '%s\n' "${GROUPS}") || true)"
+    [ -z "${CANDIDATES}" ] && bashio::log.warning "Кандидатов для переключения не найдено." && continue
 
-    # предпочитаем узел, у которого есть хоть одна успешная проверка (delay > 0);
-    # если таких нет — берём первого кандидата по списку
-    NEXT=""
+    BEST=""
+    BEST_SPEED=0
     while IFS= read -r cand; do
         [ -z "${cand}" ] && continue
+        # мёртвые узлы (нет ни одной успешной проверки) не тестируем,
+        # если есть хоть кто-то живой
         HIST="$(jq -r --arg n "${cand}" \
             '(.proxies[$n].history // []) | map(select(.delay > 0)) | length' \
             <<<"${PROXIES}" 2>/dev/null || echo 0)"
-        if [ "${HIST}" -gt 0 ] 2>/dev/null; then
-            NEXT="${cand}"
-            break
+        if [ "${HIST}" -eq 0 ] 2>/dev/null && [ -n "${BEST}" ]; then
+            continue
         fi
-        [ -z "${NEXT}" ] && NEXT="${cand}"
+        # переключаемся на кандидата и меряем скорость закачки через него
+        curl -sf --max-time 3 -X PUT "${auth[@]}" -H "Content-Type: application/json" \
+            "${API}/proxies/PROXY" -d "{\"name\": \"${cand}\"}" >/dev/null 2>&1 || true
+        SPEED="$(curl -so /dev/null --max-time 6 \
+            -x "http://127.0.0.1:${PROXY_PORT}" \
+            -w '%{speed_download}' "${SPEED_URL}" 2>/dev/null || echo 0)"
+        SPEED="${SPEED%%.*}"
+        [ -z "${SPEED}" ] && SPEED=0
+        bashio::log.info "Тест скорости: ${cand} — ${SPEED} байт/с"
+        if [ "${SPEED}" -gt "${BEST_SPEED}" ]; then
+            BEST_SPEED="${SPEED}"
+            BEST="${cand}"
+        fi
     done <<<"${CANDIDATES}"
-    [ -z "${NEXT}" ] && bashio::log.warning "Кандидатов для переключения не найдено." && continue
+
+    # ни у кого не мерили (все «мёртвые» по истории) — берём первого кандидата
+    if [ -z "${BEST}" ]; then
+        BEST="$(head -n1 <<<"${CANDIDATES}")"
+    fi
 
     if curl -sf --max-time 3 -X PUT "${auth[@]}" -H "Content-Type: application/json" \
-            "${API}/proxies/PROXY" -d "{\"name\": \"${NEXT}\"}" >/dev/null 2>&1; then
-        bashio::log.info "PROXY переключен: ${CUR} -> ${NEXT}. Перезапускаю проверку группы AUTO."
+            "${API}/proxies/PROXY" -d "{\"name\": \"${BEST}\"}" >/dev/null 2>&1; then
+        bashio::log.warning "PROXY переключен на самый быстрый узел: ${BEST} (${BEST_SPEED} байт/с). Перезапускаю проверку группы AUTO."
         # форсируем url-test, чтобы не ждать очередного интервала
         curl -sf --max-time 30 -G "${auth[@]}" "${API}/group/AUTO/delay" \
             --data-urlencode "url=${HC_URL}" --data-urlencode "timeout=5000" \
             >/dev/null 2>&1 || true
     else
-        bashio::log.warning "Не удалось переключить PROXY на ${NEXT}."
+        bashio::log.warning "Не удалось переключить PROXY на ${BEST}."
     fi
 done

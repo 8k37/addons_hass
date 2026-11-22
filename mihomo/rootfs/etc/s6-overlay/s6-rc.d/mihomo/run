@@ -285,10 +285,11 @@ if [ "$(bashio::config 'subscriptions // [] | length' 2>/dev/null || echo 0)" -g
     if bashio::config.true 'stall_watchdog' 2>/dev/null; then
         STALL_TIMEOUT="$(bashio::config 'stall_timeout' 10)" \
         HC_URL="${HC_URL}" \
+        SPEED_URL="$(bashio::config 'speedtest_url' 'https://speed.cloudflare.com/__down?bytes=2000000')" \
         CONFIG_FILE="${CONFIG_FILE}" \
         bash /etc/mihomo/stall_watchdog.sh &
         WATCHDOG_PID=$!
-        bashio::log.info "Сторож трафика запущен (порог stall_timeout=$(bashio::config 'stall_timeout' 10) с)."
+        bashio::log.info "Сторож трафика запущен (порог stall_timeout=$(bashio::config 'stall_timeout' 10) с, выбор узла — по скорости закачки)."
     fi
 fi
 
