@@ -113,6 +113,15 @@ state_set_recent() {
     printf '%s\n%s\n' "$(state_get)" "$1" > "$STATE_FILE" 2>/dev/null || true
 }
 
+# bashio::log.* работают только когда скрипт исполняется через bashio (шебанг)
+# или когда в образе есть stub-исполнимые в PATH. Ватчер запускается как
+# «bash script.sh», поэтому загружаем заглушки, если bashio недоступен —
+# иначе каждая строка лога падает с «команда не найдена».
+if ! command -v bashio::log.info >/dev/null 2>&1; then
+    bashio::log.info() { printf '[stall-watchdog][INFO] %s\n' "$*"; }
+    bashio::log.warning() { printf '[stall-watchdog][WARNING] %s\n' "$*"; }
+fi
+
 if [ "$STALL_ENABLED" != "1" ] && [ "$STALL_ENABLED" != "true" ]; then
     bashio::log.info "Сторож простоя отключен (stall_watchdog=false)"
     exit 0
