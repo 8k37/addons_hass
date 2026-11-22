@@ -13,6 +13,8 @@
 # Переменные окружения (задаются в run):
 #   STALL_WATCHDOG   0/1            — выключатель сторожа
 #   STALL_TIMEOUT    сек            — порог простоя (default 10)
+#   STALL_FLOOR_KB   КБ/с           — нижняя планка входящей скорости (default 30)
+#   MIN_SPEED_KB     КБ/с           — порог «достаточной» скорости (default 500, 0 = максимум)
 #   MIN_SPEED_KB     КБ/с           — порог «достаточной» скорости (default 500, 0 = максимум)
 #   TEST_TIMEOUT     сек            — таймаут замера скорости одного узла (default 6)
 #   EARLY_SAMPLE     сек            — интервал прогноза скорости (default 1, 0 = без прогноза)
@@ -29,6 +31,15 @@ STALL_TIMEOUT="${STALL_TIMEOUT//[^0-9]/}"
 [ -n "$STALL_TIMEOUT" ] || STALL_TIMEOUT=10
 
 MIN_SPEED_KB="${MIN_SPEED_KB:-500}"
+
+# Нижняя планка входящей скорости (КБ/с): если при активных подключениях
+# download медленнее этого — считается простоем (0 = только полный ноль трафика)
+STALL_FLOOR_KB="${STALL_FLOOR_KB:-30}"
+STALL_FLOOR_KB="${STALL_FLOOR_KB//\"/}"
+STALL_FLOOR_KB="${STALL_FLOOR_KB//[^0-9]/}"
+[ -n "$STALL_FLOOR_KB" ] || STALL_FLOOR_KB=30
+
+TEST_TIMEOUT=
 MIN_SPEED_KB="${MIN_SPEED_KB//\"/}"
 MIN_SPEED_KB="${MIN_SPEED_KB//[^0-9]/}"
 
@@ -60,7 +71,7 @@ if [ "$STALL_ENABLED" != "1" ] && [ "$STALL_ENABLED" != "true" ]; then
     exit 0
 fi
 
-bashio::log.info "Сторож простоя запущен: timeout=${STALL_TIMEOUT}s, min_speed=${MIN_SPEED_KB}КБ/с, test_timeout=${TEST_TIMEOUT}s, early_sample=${EARLY_SAMPLE}s, url=${SPEED_URL}"
+bashio::log.info "Сторож простоя запущен: timeout=${STALL_TIMEOUT}s, floor=${STALL_FLOOR_KB}КБ/с, min_speed=${MIN_SPEED_KB}КБ/с, test_timeout=${TEST_TIMEOUT}s, early_sample=${EARLY_SAMPLE}s, url=${SPEED_URL}"
 
 STALL_COUNT=0
 LAST_TOTAL=""
@@ -133,8 +144,18 @@ while true; do
     nconn=$(printf '%s' "$conn_json" | grep -o '"id"' | wc -l)
     [ "$nconn" -gt 0 ] 2>/dev/null || { STALL_COUNT=0; continue; }
 
-    if [ -z "$LAST_TOTAL" ] || [ "$now_total" != "$LAST_TOTAL" ]; then
+    if [ -z "$LAST_TOTAL" ]; then
         LAST_TOTAL="$now_total"
+        STALL_COUNT=0
+        continue
+    fi
+
+    delta=$((now_total - LAST_TOTAL))
+    LAST_TOTAL="$now_total"
+
+    # нижняя планка: входящий трафик должен идти быстрее STALL_FLOOR_KB КБ/с,
+    # иначе даже «ползущий» счётчик считается простоем
+    if [ "$delta" -lt 0 ] || [ "$delta" -ge $((STALL_FLOOR_KB * 1024)) ]; then
         STALL_COUNT=0
         continue
     fi

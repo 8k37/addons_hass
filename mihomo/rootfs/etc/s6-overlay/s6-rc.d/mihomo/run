@@ -293,6 +293,7 @@ if [ "$(bashio::config 'subscriptions // [] | length' 2>/dev/null || echo 0)" -g
    || [ "$(bashio::config 'vpns // [] | length' 2>/dev/null || echo 0)" -gt 0 ]; then
     if bashio::config.true 'stall_watchdog' 2>/dev/null; then
         STALL_TIMEOUT="$(bashio::config 'stall_timeout' 10)" \
+        STALL_FLOOR_KB="$(bashio::config 'stall_floor' 30)" \
         MIN_SPEED_KB="$(bashio::config 'stall_min_speed' 500)" \
         TEST_TIMEOUT="$(bashio::config 'stall_test_timeout' 6)" \
         EARLY_SAMPLE="$(bashio::config 'stall_early_sample' 1)" \

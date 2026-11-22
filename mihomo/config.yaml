@@ -1,6 +1,6 @@
 # Home Assistant Add-on: Mihomo (Clash Meta)
 name: Mihomo
-version: "1.11.8"
+version: "1.11.9"
 slug: mihomo
 description: Mihomo (Clash Meta) proxy core — HTTP/SOCKS5 прокси и внешняя панель управления
 url: https://github.com/MetaCubeX/mihomo
@@ -39,6 +39,7 @@ options:
   dns_hijack: true
   stall_watchdog: true
   stall_timeout: 10
+  stall_floor: 30
   stall_min_speed: 500
   stall_test_timeout: 6
   stall_early_sample: 1
@@ -53,6 +54,7 @@ schema:
   dns_hijack: bool
   stall_watchdog: bool
   stall_timeout: "int(1,3600)?"
+  stall_floor: "int(0,102400)?"
   stall_min_speed: "int(0,102400)?"
   stall_test_timeout: "int(1,60)?"
   stall_early_sample: "int(0,10)?"
