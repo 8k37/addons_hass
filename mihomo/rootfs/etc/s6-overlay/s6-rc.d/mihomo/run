@@ -294,8 +294,8 @@ mihomo -d "${CONFIG_DIR}" -f "${CONFIG_FILE}" &
 MIHOMO_PID=$!
 
 # Сторож имеет смысл только если есть что менять (подписки/VPN)
-if [ "$(bashio::config 'subscriptions // [] | length' 2>/dev/null || echo 0)" -gt 0 ] \
-   || [ "$(bashio::config 'vpns // [] | length' 2>/dev/null || echo 0)" -gt 0 ]; then
+if [ "$(jq '.subscriptions // [] | length' "${OPTIONS_JSON}" 2>/dev/null || echo 0)" -gt 0 ] \
+   || [ "$(jq '.vpns // [] | length' "${OPTIONS_JSON}" 2>/dev/null || echo 0)" -gt 0 ]; then
     if bashio::config.true 'stall_watchdog' 2>/dev/null; then
         STALL_TIMEOUT="$(bashio::config 'stall_timeout_sec' 10)" \
         STALL_FLOOR_BPS="$(bashio::config 'stall_floor_bps' 30720)" \

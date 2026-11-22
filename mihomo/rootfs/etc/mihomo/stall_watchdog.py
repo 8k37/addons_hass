@@ -90,6 +90,7 @@ CACHE_FILE = env_str("CACHE_FILE", "/etc/mihomo/.stall_speed_cache")
 CACHE_TTL = env_int("CACHE_TTL", 600)
 EMERGENCY_AFTER = env_int("EMERGENCY_AFTER", 10)
 STATE_FILE = env_str("STATE_FILE", "/etc/mihomo/.stall_state")
+EMPTY_CHECK_INTERVAL = env_int("EMPTY_CHECK_INTERVAL", 10)
 
 SUB_LOCK_FILE = "/etc/mihomo/.sub_refresh_lock"
 SUB_LAST_FILE = "/etc/mihomo/.sub_refresh_last"
@@ -379,6 +380,7 @@ def main():
 
     stall = 0
     last_total = None
+    last_empty_check = 0.0
     cache = cache_load()
 
     while True:
@@ -400,6 +402,19 @@ def main():
         if nconn == 0:
             stall = 0
             last_total = None
+            # При пустой группе PROXY подключений через прокси не будет вообще,
+            # поэтому пустоту группы проверяем независимо от трафика — раз в
+            # EMPTY_CHECK_INTERVAL секунд (sub_recover имеет свой cooldown 10с)
+            if time.time() - last_empty_check >= EMPTY_CHECK_INTERVAL:
+                last_empty_check = time.time()
+                g = api_group_read()
+                if g is not None:
+                    pdata = (g.get("proxies") or {}).get(GROUP_NAME) or {}
+                    if not (pdata.get("all")):
+                        log("WARNING", "В группе %s нет ни одного узла "
+                            "(подключений нет — по трафику не сработать) — "
+                            "проверка/обновление подписки" % GROUP_NAME)
+                        sub_recover()
             continue
 
         now_total = sum(int(c.get("download") or 0) for c in proxied)
