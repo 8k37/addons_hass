@@ -376,6 +376,9 @@ def sub_recover():
 
 
 # ------------------------------------------------------------------ цикл ---
+SPRINT_ACTIVE = False  # идет ли сейчас тест скорости (полный спринт)
+
+
 def main():
     if not STALL_ENABLED:
         log("INFO", "Сторож простоя отключен (stall_watchdog=false)")
@@ -479,6 +482,13 @@ def main():
                 state_write(0, "|".join(rl[-5:]))
                 continue
 
+        # Защита от повторного запуска: пока предыдущий тест скорости не
+        # завершился, новый не стартует (и кэш-проверка, и полный спринт)
+        if SPRINT_ACTIVE:
+            log("INFO", "Тест скорости уже выполняется — повторный запуск отложен до его завершения")
+            time.sleep(CHECK_INTERVAL)
+            continue
+
         # Быстрый путь: в кэше есть свежий подходящий узел — быстрый замер
         # с ранним выходом стоит недорого; не прошел — полный спринт
         if CACHE_TTL > 0 and MIN_SPEED_BPS > 0:
@@ -501,6 +511,7 @@ def main():
 
         # порядок теста: сначала узлы, которые по кэшу были быстрыми
         order = [n for n in nodes if n and n not in GROUP_NAMES and n != cur]
+        SPRINT_ACTIVE = True
         log("INFO", "Запуск теста скорости: %d кандидат(ов)" % len(order))
         order = sorted(order, key=lambda n: -cache.get(n, (0, 0))[0])
         best_node, best_speed, chosen = "", 0, ""
@@ -520,6 +531,8 @@ def main():
                 log("INFO", "Подходит, тест остальных не нужен: %s" % node)
                 break
         cache_save(cache)
+
+        SPRINT_ACTIVE = False
 
         if chosen:
             node = chosen
