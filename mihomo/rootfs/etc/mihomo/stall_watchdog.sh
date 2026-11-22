@@ -67,8 +67,9 @@ API_PORT="${API_PORT//[^0-9]/}"
 API="http://${API_HOST}:${API_PORT}"
 
 # Кэш результатов замеров скорости: файл «speed|timestamp|node».
-# Позволяет при повторном срабатывании не тратить время на спринт по узлам,
-# если недавно (не старше CACHE_TTL секунд) уже был найден подходящий узел.
+# Позволяет при повторном срабатывании не тратить время на спринт по узлам:
+# кандидат из кэша сначала быстро перепроверяется, и только если он до сих
+# пор дотягивает до порога — используется без полного спринта.
 CACHE_FILE="${CACHE_FILE:-/etc/mihomo/.stall_speed_cache}"
 CACHE_TTL="${CACHE_TTL:-600}"
 CACHE_TTL="${CACHE_TTL//\"/}"
@@ -100,6 +101,7 @@ measure_node() {
         echo 0; return
     fi
     out=$(mktemp)
+    local start=$(date +%s)
     curl -fsS --max-time "$TEST_TIMEOUT" -x "http://127.0.0.1:${MIXED_PORT}" "$SPEED_URL" -o "$out" 2>/dev/null &
     pid=$!
 
@@ -125,7 +127,11 @@ measure_node() {
     wait "$pid" 2>/dev/null
     size=$(stat -c%s "$out" 2>/dev/null || echo 0)
     rm -f "$out"
-    speed=$((size / TEST_TIMEOUT))
+    # скорость по фактическому времени закачки: деление на полный TEST_TIMEOUT
+    # занижало скорость узлов, скачавших файл раньше таймаута
+    local elapsed=$(( $(date +%s) - start ))
+    [ "$elapsed" -lt 1 ] && elapsed=1
+    speed=$((size / elapsed))
     echo "$speed"
 }
 
@@ -151,10 +157,29 @@ cache_lookup() {
     return 1
 }
 
-# Дописать результат замера в кэш (speed байт/с, node)
+# Дописать результат замера в кэш (speed байт/с, node).
+# Предыдущие записи узла удаляются — одна актуальная запись на узел.
 cache_save() {
     [ "$CACHE_TTL" -gt 0 ] || return 0
-    printf '%s|%s|%s\n' "$1" "$(date +%s)" "$2" >> "$CACHE_FILE" 2>/dev/null || true
+    local node="$2"
+    if [ -f "$CACHE_FILE" ]; then
+        awk -F'|' -v n="$node" 'NF==3 && $3 != n' "$CACHE_FILE" > "${CACHE_FILE}.tmp" 2>/dev/null \
+            && mv "${CACHE_FILE}.tmp" "$CACHE_FILE"
+    fi
+    printf '%s|%s|%s\n' "$1" "$(date +%s)" "$node" >> "$CACHE_FILE" 2>/dev/null || true
+}
+
+# Удалить узел из кэша (например, если он перестал дотягивать до порога)
+cache_remove() {
+    [ -f "$CACHE_FILE" ] || return 0
+    awk -F'|' -v n="$1" 'NF==3 && $3 != n' "$CACHE_FILE" > "${CACHE_FILE}.tmp" 2>/dev/null \
+        && mv "${CACHE_FILE}.tmp" "$CACHE_FILE"
+}
+
+# Последняя сохранённая скорость узла (0 — записи нет)
+cache_get_speed() {
+    [ -f "$CACHE_FILE" ] || { echo 0; return; }
+    awk -F'|' -v n="$1" '$3 == n {v=$1} END {print v + 0}' "$CACHE_FILE" 2>/dev/null || echo 0
 }
 
 # Выбросить протухшие записи кэша
@@ -220,18 +245,35 @@ while true; do
 
     cur=$(api_get "/proxies/PROXY" 2>/dev/null | sed -n 's/.*"now":"\([^"]*\)".*/\1/p')
 
-    # Быстрый путь: в кэше есть свежий подходящий узел — переключаемся без замеров
+    # Быстрый путь: в кэше есть свежий подходящий узел — сначала быстрый замер
+    # (ранний выход делает его дешёвым). Переключение «вслепую» убрано: без
+    # перепроверки ватчер мог весь TTL переключаться на один и тот же узел,
+    # который успел деградировать.
     cache_prune
     if cached=$(cache_lookup); then
-        bashio::log.info "Кэш: узел ${cached} показывал достаточную скорость недавно — переключаюсь без замеров"
-        switch_and_retest "$cached"
-        LAST_TOTAL=""
-        continue
+        speed=$(measure_node "$cached")
+        cache_save "$speed" "$cached"
+        if [ "$speed" -ge $((MIN_SPEED_KB * 1024)) ]; then
+            bashio::log.info "Кэш: ${cached} подтвержден (${speed} байт/с) — переключаюсь"
+            switch_and_retest "$cached"
+            LAST_TOTAL=""
+            continue
+        fi
+        bashio::log.warning "Кэш: ${cached} больше не дотягивает (${speed} байт/с) — удаляю из кэша, полный спринт"
+        cache_remove "$cached"
     fi
 
     best_node=""
     best_speed=0
     chosen=""
+
+    # порядок теста: сначала узлы, которые по кэшу были быстрыми (даже старая
+    # запись лучше случайного порядка) — спринт заканчивается раньше
+    nodes_sorted=$(while IFS= read -r n; do
+        [ -n "$n" ] || continue
+        printf '%s %s\n' "$(cache_get_speed "$n")" "$n"
+    done <<< "$nodes" | sort -rn | awk '{print $2}')
+    [ -n "$nodes_sorted" ] || nodes_sorted="$nodes"
 
     while IFS= read -r node; do
         [ -n "$node" ] || continue
@@ -252,7 +294,7 @@ while true; do
             bashio::log.info "Подходит, тест остальных не нужен: $node"
             break
         fi
-    done <<< "$nodes"
+    done <<< "$nodes_sorted"
 
     if [ -n "$chosen" ]; then
         node=$chosen
