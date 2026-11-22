@@ -41,9 +41,10 @@ STALL_FLOOR_KB="${STALL_FLOOR_KB//\"/}"
 STALL_FLOOR_KB="${STALL_FLOOR_KB//[^0-9]/}"
 [ -n "$STALL_FLOOR_KB" ] || STALL_FLOOR_KB=30
 
-TEST_TIMEOUT=
+TEST_TIMEOUT="${TEST_TIMEOUT:-6}"
 MIN_SPEED_KB="${MIN_SPEED_KB//\"/}"
 MIN_SPEED_KB="${MIN_SPEED_KB//[^0-9]/}"
+[ -n "$MIN_SPEED_KB" ] || MIN_SPEED_KB=500
 
 TEST_TIMEOUT="${TEST_TIMEOUT:-6}"
 TEST_TIMEOUT="${TEST_TIMEOUT//\"/}"
@@ -251,6 +252,76 @@ emergency_pick() {
     return 1
 }
 
+# --- Восстановление подписки при пустом PROXY --------------------------------
+SUB_LOCK_FILE="/etc/mihomo/.sub_refresh_lock"
+SUB_LAST_FILE="/etc/mihomo/.sub_refresh_last"
+SUB_FAIL_FILE="/etc/mihomo/.sub_refresh_fails"
+
+sub_refresh_running() {
+    [ -f "$SUB_LOCK_FILE" ] || return 1
+    local pid; pid=$(cat "$SUB_LOCK_FILE" 2>/dev/null)
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null
+}
+
+# Фоновое обновление всех proxy-providers (встроенный Compatible не трогаем)
+sub_refresh_do() {
+    (
+        echo $$ > "$SUB_LOCK_FILE"
+        provs=$(api_get "/providers/proxies" 2>/dev/null | jq -r '.providers | to_entries[] | select(.value.vehicleType != "Compatible") | .key' 2>/dev/null)
+        if [ -z "$provs" ]; then
+            bashio::log.warning "PROXY пуст, но proxy-providers в конфиге нет — восстанавливать нечего, проверь подписку/конфиг"
+        else
+            n=0
+            while IFS= read -r p; do
+                [ -n "$p" ] || continue
+                n=$((n+1))
+                if curl -fsS --max-time 30 "${CURL_AUTH[@]}" -X PUT "$API/providers/proxies/$p" >/dev/null 2>&1; then
+                    bashio::log.info "Провайдер ${p}: обновлен"
+                else
+                    bashio::log.warning "Провайдер ${p}: не удалось обновить"
+                fi
+            done <<< "$provs"
+            bashio::log.info "PROXY пуст — запущено обновление подписок (${n} провайдеров)"
+        fi
+        rm -f "$SUB_LOCK_FILE"
+    ) &
+}
+
+# Вызывается при пустом PROXY. Защиты: lock от параллельного запуска,
+# не чаще раза в минуту (после 5 неудач — раз в 5 минут).
+sub_recover() {
+    local now=$(date +%s)
+    local fails=$(cat "$SUB_FAIL_FILE" 2>/dev/null); case "$fails" in ''|*[!0-9]*) fails=0;; esac
+    local last=$(cat "$SUB_LAST_FILE" 2>/dev/null); case "$last" in ''|*[!0-9]*) last=0;; esac
+    local cooldown=60
+    [ "$fails" -ge 5 ] && cooldown=300
+    [ $((now - last)) -lt "$cooldown" ] && return 0
+    echo "$now" > "$SUB_LAST_FILE"
+
+    if sub_refresh_running; then
+        bashio::log.info "Обновление подписок уже выполняется — жду завершения"
+        sleep 5
+        return 0
+    fi
+    sub_refresh_do
+    sleep 10   # дать mihomo скачать и применить подписку
+
+    local g cnt
+    g=$(api_get "/proxies/PROXY" 2>/dev/null || true)
+    cnt=$(printf '%s' "$g" | jq -r '.proxies.PROXY.all // [] | length' 2>/dev/null)
+    case "$cnt" in ''|*[!0-9]*) cnt=0;; esac
+    if [ "$cnt" -gt 0 ]; then
+        bashio::log.info "Подписка восстановлена: в PROXY ${cnt} узлов"
+        echo 0 > "$SUB_FAIL_FILE"
+        LAST_TOTAL=""
+    else
+        fails=$((fails+1))
+        echo "$fails" > "$SUB_FAIL_FILE"
+        bashio::log.warning "Подписка пуста и после обновления (неудачных попыток: ${fails})"
+    fi
+    return 0
+}
+
 is_group_name() {
     case "$1" in
         PROXY|AUTO|FASTEST|DIRECT|REJECT|GLOBAL|PROVIDER|PASS|REJECT-DROP|COMPATIBLE|dtg|Name) return 0 ;;
@@ -298,6 +369,17 @@ while true; do
     STALL_COUNT=0
 
     bashio::log.warning "Входящий трафик (download) стоит ${STALL_TIMEOUT}s при $nconn прокси-подключениях — тест скорости узлов"
+
+    # PROXY пуст (подписка умерла/отдала пустой список) — пробуем перекачать
+    sub_nodes=$(printf '%s' "$nodes" 2>/dev/null)
+    group_json=$(api_get "/proxies/PROXY" 2>/dev/null || true)
+    nodes=$(printf '%s' "$group_json" | jq -r '.proxies.PROXY.all // [] | .[]' 2>/dev/null)
+    cur=$(printf '%s' "$group_json" | jq -r '.proxies.PROXY.now // ""' 2>/dev/null)
+    [ -n "$nodes" ] || {
+        bashio::log.warning "В группе PROXY нет ни одного узла — запускаю проверку/обновление подписки"
+        sub_recover
+        continue
+    }
 
     # Аварийный режим: серия срабатываний без результата — меняем узел вслепую
     if [ "$EMERGENCY_AFTER" -gt 0 ] 2>/dev/null && [ "$(state_get)" -ge "$EMERGENCY_AFTER" ] 2>/dev/null; then
