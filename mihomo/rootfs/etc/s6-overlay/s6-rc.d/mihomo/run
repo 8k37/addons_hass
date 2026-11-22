@@ -169,6 +169,15 @@ if grep -q '^dns:' "${CONFIG_FILE}"; then
 fi
 bashio::log.info "ipv6: false — DNS не отдаёт AAAA, клиенты используют IPv4 через прокси."
 
+# unified-delay всегда включен: задержка узлов измеряется без учёта
+# рукопожатия TLS — цифры честные и сравнимые между протоколами.
+# (пересоздаём/принуждаем при каждом старте — пользовательская правка не переживёт перезапуск)
+if grep -q '^unified-delay:' "${CONFIG_FILE}"; then
+    sed -i 's/^unified-delay:.*/unified-delay: true/' "${CONFIG_FILE}"
+else
+    printf '\nunified-delay: true\n' >> "${CONFIG_FILE}"
+fi
+
 # Правила (rules) работают только в режиме rule — в global/direct ядро их игнорирует
 if [ "${MODE}" != "rule" ]; then
     bashio::log.warning "mode=${MODE}: правила (в т.ч. GEOIP,RU,DIRECT) не действуют. Для маршрутизации по правилам установите mode: rule в настройках аддона."
