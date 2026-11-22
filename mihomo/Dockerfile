@@ -7,7 +7,7 @@ ARG MIHOMO_VERSION
 ARG METACUBEXD_VERSION
 
 RUN set -eux; \
-    apk add --no-cache ca-certificates curl tzdata tar gzip iptables; \
+    apk add --no-cache ca-certificates curl tzdata tar gzip iptables python3; \
     case "${BUILD_ARCH}" in \
       aarch64) MIHOMO_ARCH="arm64" ;; \
       armv7)   MIHOMO_ARCH="armv7" ;; \

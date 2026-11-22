@@ -178,6 +178,20 @@ else
     printf '\nunified-delay: true\n' >> "${CONFIG_FILE}"
 fi
 
+# Гео-базы (GeoIP/GeoSite) обновляются ядром автоматически: при старте, если
+# база устарела, и далее раз в 24 часа (правило GEOIP,RU,DIRECT от этого зависит)
+if grep -q '^geo-auto-update:' "${CONFIG_FILE}"; then
+    sed -i 's/^geo-auto-update:.*/geo-auto-update: true/' "${CONFIG_FILE}"
+else
+    printf '\ngeo-auto-update: true\n' >> "${CONFIG_FILE}"
+fi
+if grep -q '^geo-update-interval:' "${CONFIG_FILE}"; then
+    sed -i 's/^geo-update-interval:.*/geo-update-interval: 24/' "${CONFIG_FILE}"
+else
+    printf '\ngeo-update-interval: 24\n' >> "${CONFIG_FILE}"
+fi
+bashio::log.info "geo-auto-update: true — GeoIP/GeoSite базы обновляются ядром автоматически (раз в 24ч)."
+
 # Правила (rules) работают только в режиме rule — в global/direct ядро их игнорирует
 if [ "${MODE}" != "rule" ]; then
     bashio::log.warning "mode=${MODE}: правила (в т.ч. GEOIP,RU,DIRECT) не действуют. Для маршрутизации по правилам установите mode: rule в настройках аддона."
@@ -293,16 +307,18 @@ if [ "$(bashio::config 'subscriptions // [] | length' 2>/dev/null || echo 0)" -g
    || [ "$(bashio::config 'vpns // [] | length' 2>/dev/null || echo 0)" -gt 0 ]; then
     if bashio::config.true 'stall_watchdog' 2>/dev/null; then
         STALL_TIMEOUT="$(bashio::config 'stall_timeout_sec' 10)" \
-        STALL_FLOOR_KB="$(( $(bashio::config 'stall_floor_bps' 30720) / 1024 ))" \
-        MIN_SPEED_KB="$(( $(bashio::config 'stall_min_speed_bps' 512000) / 1024 ))" \
+        STALL_FLOOR_BPS="$(bashio::config 'stall_floor_bps' 30720)" \
+        MIN_SPEED_BPS="$(bashio::config 'stall_min_speed_bps' 512000)" \
         TEST_TIMEOUT="$(bashio::config 'stall_test_timeout_sec' 6)" \
         EARLY_SAMPLE="$(bashio::config 'stall_early_sample_sec' 1)" \
         HC_URL="${HC_URL}" \
         SPEED_URL="$(bashio::config 'speedtest_url' 'https://speed.cloudflare.com/__down?bytes=2000000')" \
-        CONFIG_FILE="${CONFIG_FILE}" \
         CACHE_TTL="$(bashio::config 'stall_cache_ttl_sec' 600)" \
         EMERGENCY_AFTER="$(bashio::config 'stall_emergency_after' 10)" \
-        bash /etc/mihomo/stall_watchdog.sh &
+        MIXED_PORT="$(bashio::config 'proxy_port' 7890)" \
+        API_SECRET="$(yq -r '.secret // ""' "${CONFIG_FILE}" 2>/dev/null || true)" \
+        GROUP_NAME="$(yq -r '(.proxy-groups // [])[] | select(.type == "select") | .name' "${CONFIG_FILE}" 2>/dev/null | head -n1)" \
+        python3 /etc/mihomo/stall_watchdog.py &
         WATCHDOG_PID=$!
         bashio::log.info "Сторож трафика запущен."
     fi
