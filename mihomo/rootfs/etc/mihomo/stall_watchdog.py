@@ -33,6 +33,7 @@
 
 import json
 import os
+import sys
 import threading
 import time
 import urllib.error
@@ -40,8 +41,27 @@ import urllib.parse
 import urllib.request
 
 
+# ANSI-цвета: выделяем все строки сторожа в журнале,
+# чтобы наши доработки было видно с первого взгляда.
+_LEVEL_COLORS = {
+    "INFO": "96",      # ярко-голубой — служебные сообщения сторожа
+    "WARNING": "93",   # ярко-жёлтый — срабатывания/переключения
+    "ERROR": "91",     # ярко-красный — ошибки
+    "OK": "92",        # ярко-зелёный — успешные действия
+}
+
+
+def _c(code, text):
+    if os.environ.get("NO_COLOR"):
+        return text
+    return "\033[%sm%s\033[0m" % (code, text)
+
+
 def log(level, msg):
-    print("[stall-watchdog][%s] %s" % (level, msg), flush=True)
+    color = _LEVEL_COLORS.get(level, "97")
+    tag = _c(color, "[stall-watchdog]")
+    lvl = _c("2;" + color, "[%s]" % level)
+    print("%s %s %s" % (tag, lvl, _c(color, msg)), flush=True)
 
 
 def env_str(name, default=""):
