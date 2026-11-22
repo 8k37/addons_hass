@@ -213,7 +213,9 @@ if bashio::config.true 'gateway_mode'; then
     if ! grep -q '^redir-port:' "${CONFIG_FILE}"; then
         printf '\nredir-port: 7893\n' >> "${CONFIG_FILE}"
     fi
-    if ! grep -q '^dns:' "${CONFIG_FILE}"; then
+    if ! bashio::config.true 'dns_hijack'; then
+        bashio::log.info "dns_hijack=false — DNS-перехват отключен, DNS клиентов идёт напрямую (порт 53 не заворачивается)."
+    elif ! grep -q '^dns:' "${CONFIG_FILE}"; then
         cat >> "${CONFIG_FILE}" <<'EOF'
 dns:
   enable: true
