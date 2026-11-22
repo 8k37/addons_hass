@@ -294,9 +294,9 @@ def sub_refresh_running():
 
 
 def sub_refresh_worker(names):
-    """Обновляет proxy-providers через API. Скачивает само ядро mihomo —
-    провайдеры настроены с proxy: DIRECT, поэтому обновление не зависит
-    от рабочего прокси и не фейлится при мертвом VPN."""
+    """Проверка доступности провайдеров (health-check) через API.
+    Обновление подписки здесь НЕ форсируется — провайдеры обновляются
+    ядром сами (interval в конфиге). Запросы идут напрямую, без прокси."""
     try:
         with open(SUB_LOCK_FILE, "w", encoding="utf-8") as f:
             f.write("1")
@@ -305,12 +305,13 @@ def sub_refresh_worker(names):
     ok = 0
     for name in names:
         try:
-            api("PUT", "/providers/proxies/" + urllib.parse.quote(name), timeout=30)
-            log("INFO", "Провайдер %s: обновлен" % name)
+            api("GET", "/providers/proxies/" + urllib.parse.quote(name)
+                + "/healthcheck", timeout=30)
+            log("INFO", "Провайдер %s: проверка доступности запущена" % name)
             ok += 1
         except Exception:
-            log("WARNING", "Провайдер %s: не удалось обновить" % name)
-    log("INFO", "PROXY пуст — запущено обновление подписок (%d провайдеров)" % ok)
+            log("WARNING", "Провайдер %s: не удалось запустить проверку" % name)
+    log("INFO", "PROXY пуст — запущена проверка провайдеров (%d/%d)" % (ok, len(names)))
     try:
         os.remove(SUB_LOCK_FILE)
     except Exception:
@@ -319,7 +320,10 @@ def sub_refresh_worker(names):
 
 def sub_recover():
     """Вызывается при пустом PROXY. Защиты: lock от параллельного запуска,
-    не чаще раза в 10 секунд (после 5 неудач — раз в минуту)."""
+    не чаще раза в 10 секунд (после 5 неудач — раз в минуту).
+    Обновление подписки не форсируется — провайдеры обновляются ядром сами
+    (interval в конфиге). Здесь только проверка доступности узлов провайдера
+    (health-check), чтобы ускорить появление живых узлов в группе."""
     now = int(time.time())
     fails = read_int_file(SUB_FAIL_FILE)
     last = read_int_file(SUB_LAST_FILE)
@@ -333,7 +337,7 @@ def sub_recover():
         pass
 
     if sub_refresh_running():
-        log("INFO", "Обновление подписок уже выполняется — жду завершения")
+        log("INFO", "Проверка провайдеров уже выполняется — жду завершения")
         time.sleep(5)
         return
 
@@ -353,7 +357,8 @@ def sub_recover():
     g = api_group_read()
     nodes = ((g or {}).get("proxies") or {}).get(GROUP_NAME) or {}
     if nodes.get("all"):
-        log("INFO", "Подписка восстановлена: в %s %d узлов" % (GROUP_NAME, len(nodes["all"])))
+        log("INFO", "В %s появились узлы (%d) — подписка восстановилась после автообновления"
+            % (GROUP_NAME, len(nodes["all"])))
         try:
             with open(SUB_FAIL_FILE, "w", encoding="utf-8") as f:
                 f.write("0")
@@ -366,7 +371,8 @@ def sub_recover():
                 f.write(str(fails))
         except Exception:
             pass
-        log("WARNING", "Подписка пуста и после обновления (неудачных попыток: %d)" % fails)
+        log("WARNING", "В %s по-прежнему пусто после проверки (неудачных попыток: %d) — "
+            "жду автообновления провайдеров" % (GROUP_NAME, fails))
 
 
 # ------------------------------------------------------------------ цикл ---
@@ -413,7 +419,7 @@ def main():
                     if not (pdata.get("all")):
                         log("WARNING", "В группе %s нет ни одного узла "
                             "(подключений нет — по трафику не сработать) — "
-                            "проверка/обновление подписки" % GROUP_NAME)
+                            "запускаю проверку провайдеров" % GROUP_NAME)
                         sub_recover()
             continue
 
@@ -450,7 +456,7 @@ def main():
         nodes = pdata.get("all") or []
         cur = pdata.get("now") or ""
         if not nodes:
-            log("WARNING", "В группе %s нет ни одного узла — запускаю проверку/обновление подписки"
+            log("WARNING", "В группе %s нет ни одного узла — запускаю проверку провайдеров"
                 % GROUP_NAME)
             sub_recover()
             continue
