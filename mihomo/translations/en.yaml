@@ -1,0 +1,53 @@
+configuration:
+  dns_hijack:
+    name: DNS hijack
+    description: Redirect client DNS queries (port 53) to mihomo. Disable if you run your own DNS (AdGuard, Pi-hole) on the router.
+  stall_watchdog:
+    name: Stall watchdog
+    description: Monitor download traffic. When downloads stall (or fall below the floor) with active connections — speed-test nodes and switch to a fast one.
+  stall_timeout_sec:
+    name: Stall threshold (seconds)
+    description: How many seconds in a row the download rate must stay below the floor before the watchdog starts testing nodes.
+  stall_floor_kbps:
+    name: Stall speed floor (KB/s)
+    description: Download rate below this value counts as a stall. 0 — only a full traffic stop counts.
+  stall_min_speed_kbps:
+    name: Sufficient node speed (KB/s)
+    description: The first node reaching this speed during the test is selected immediately. 0 — always look for the fastest one.
+  stall_test_timeout_sec:
+    name: Per-node test timeout (seconds)
+    description: Maximum seconds for a single node speed measurement.
+  stall_early_sample_sec:
+    name: Early forecast interval (seconds)
+    description: Every this many seconds the speed is estimated from bytes downloaded so far; if the forecast already exceeds the threshold, the test stops early. 0 — disable.
+  speedtest_url:
+    name: Speed test URL
+    description: File downloaded through the node during the speed test. 2–10 MB recommended.
+  config_file:
+    name: Mihomo config path
+    description: Core configuration file (normally no need to change).
+  mode:
+    name: Routing mode
+    description: rule — follow config rules, global — proxy everything, direct — proxy nothing.
+  gateway_mode:
+    name: Gateway mode
+    description: Route LAN client traffic through mihomo (iptables). Requires setting the add-on host as the network gateway.
+  subscriptions:
+    name: Subscriptions
+    description: List of proxy provider subscription URLs.
+  vpns:
+    name: VPN configs
+    description: Paths to VPN configuration files.
+  healthcheck_url:
+    name: Health check URL
+    description: Endpoint used for node health checks (url-test, AUTO group).
+network:
+  7890/tcp:
+    name: Proxy port (HTTP/SOCKS5)
+    description: Mixed port for proxy clients.
+  7891/tcp:
+    name: SOCKS5 port
+    description: Separate SOCKS5 port.
+  9090/tcp:
+    name: Control panel (API)
+    description: External controller and web UI.
