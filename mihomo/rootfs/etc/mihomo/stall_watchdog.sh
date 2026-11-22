@@ -15,12 +15,12 @@
 #   STALL_TIMEOUT    сек            — порог простоя (default 10)
 #   STALL_FLOOR_KB   КБ/с           — нижняя планка входящей скорости (default 30)
 #   MIN_SPEED_KB     КБ/с           — порог «достаточной» скорости (default 500, 0 = максимум)
-#   MIN_SPEED_KB     КБ/с           — порог «достаточной» скорости (default 500, 0 = максимум)
 #   TEST_TIMEOUT     сек            — таймаут замера скорости одного узла (default 6)
 #   EARLY_SAMPLE     сек            — интервал прогноза скорости (default 1, 0 = без прогноза)
 #   SPEED_URL        url            — файл для закачки
 #   MIXED_PORT       порт           — mixed-порт mihomo
 #   API_HOST / API_PORT             — REST API mihomo
+#   CACHE_TTL       сек            — сколько хранить результаты замеров (default 600, 0 = без кэша)
 # ==============================================================================
 
 STALL_ENABLED="${STALL_WATCHDOG:-1}"
@@ -65,6 +65,15 @@ API_PORT="${API_PORT:-9090}"
 API_PORT="${API_PORT//[^0-9]/}"
 [ -n "$API_PORT" ] || API_PORT=9090
 API="http://${API_HOST}:${API_PORT}"
+
+# Кэш результатов замеров скорости: файл «speed|timestamp|node».
+# Позволяет при повторном срабатывании не тратить время на спринт по узлам,
+# если недавно (не старше CACHE_TTL секунд) уже был найден подходящий узел.
+CACHE_FILE="${CACHE_FILE:-/etc/mihomo/.stall_speed_cache}"
+CACHE_TTL="${CACHE_TTL:-600}"
+CACHE_TTL="${CACHE_TTL//\"/}"
+CACHE_TTL="${CACHE_TTL//[^0-9]/}"
+[ -n "$CACHE_TTL" ] || CACHE_TTL=600
 
 if [ "$STALL_ENABLED" != "1" ] && [ "$STALL_ENABLED" != "true" ]; then
     bashio::log.info "Сторож простоя отключен (stall_watchdog=false)"
@@ -118,6 +127,43 @@ measure_node() {
     rm -f "$out"
     speed=$((size / TEST_TIMEOUT))
     echo "$speed"
+}
+
+# Самый свежий узел из кэша, чья скорость >= порога и запись не старше TTL.
+# Печатает имя узла; 0 и пусто — узел не найден.
+cache_lookup() {
+    [ "$CACHE_TTL" -gt 0 ] || return 1
+    [ -f "$CACHE_FILE" ] || return 1
+    local now speed ts node best_ts=0 best=""
+    now=$(date +%s)
+    while IFS='|' read -r speed ts node; do
+        [ -n "$speed" ] && [ -n "$ts" ] && [ -n "$node" ] || continue
+        [ "$speed" -gt 0 ] 2>/dev/null || continue
+        [ $((now - ts)) -le "$CACHE_TTL" ] || continue
+        [ "$node" = "$cur" ] && continue
+        # при пороге 0 (режим «всегда максимум») кэшем не пользуемся —
+        # там нужен полный замер каждого узла
+        [ "$MIN_SPEED_KB" -gt 0 ] || return 1
+        [ "$speed" -ge $((MIN_SPEED_KB * 1024)) ] || continue
+        if [ "$ts" -gt "$best_ts" ]; then best_ts=$ts; best=$node; fi
+    done < "$CACHE_FILE"
+    [ -n "$best" ] && { printf '%s' "$best"; return 0; }
+    return 1
+}
+
+# Дописать результат замера в кэш (speed байт/с, node)
+cache_save() {
+    [ "$CACHE_TTL" -gt 0 ] || return 0
+    printf '%s|%s|%s\n' "$1" "$(date +%s)" "$2" >> "$CACHE_FILE" 2>/dev/null || true
+}
+
+# Выбросить протухшие записи кэша
+cache_prune() {
+    [ "$CACHE_TTL" -gt 0 ] || return 0
+    [ -f "$CACHE_FILE" ] || return 0
+    local now=$(date +%s)
+    awk -F'|' -v now="$now" -v ttl="$CACHE_TTL" 'NF==3 && $1 ~ /^[0-9]+$/ && (now-$2)<=ttl' \
+        "$CACHE_FILE" > "${CACHE_FILE}.tmp" 2>/dev/null && mv "${CACHE_FILE}.tmp" "$CACHE_FILE"
 }
 
 switch_and_retest() {
@@ -174,6 +220,15 @@ while true; do
 
     cur=$(api_get "/proxies/PROXY" 2>/dev/null | sed -n 's/.*"now":"\([^"]*\)".*/\1/p')
 
+    # Быстрый путь: в кэше есть свежий подходящий узел — переключаемся без замеров
+    cache_prune
+    if cached=$(cache_lookup); then
+        bashio::log.info "Кэш: узел ${cached} показывал достаточную скорость недавно — переключаюсь без замеров"
+        switch_and_retest "$cached"
+        LAST_TOTAL=""
+        continue
+    fi
+
     best_node=""
     best_speed=0
     chosen=""
@@ -185,6 +240,7 @@ while true; do
 
         speed=$(measure_node "$node")
         bashio::log.info "Тест скорости: $node — ${speed} байт/с"
+        cache_save "$speed" "$node"
 
         if [ "$speed" -gt "$best_speed" ]; then
             best_speed=$speed
