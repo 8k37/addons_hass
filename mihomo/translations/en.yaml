@@ -8,11 +8,11 @@ configuration:
   stall_timeout_sec:
     name: Stall threshold (seconds)
     description: How many seconds in a row the download rate must stay below the floor before the watchdog starts testing nodes.
-  stall_floor_kbps:
-    name: Stall speed floor (KB/s)
+  stall_floor_bps:
+    name: Stall speed floor (bytes/s)
     description: Download rate below this value counts as a stall. 0 — only a full traffic stop counts.
-  stall_min_speed_kbps:
-    name: Sufficient node speed (KB/s)
+  stall_min_speed_bps:
+    name: Sufficient node speed (bytes/s)
     description: The first node reaching this speed during the test is selected immediately. 0 — always look for the fastest one.
   stall_test_timeout_sec:
     name: Per-node test timeout (seconds)
