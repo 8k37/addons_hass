@@ -6,11 +6,15 @@
 # через mixed-порт и переключение на первый узел, дотягивающий
 # до stall_min_speed КБ/с (0 — всегда брать самого быстрого).
 #
+# Ускорение: если через EARLY_SAMPLE секунд темп закачки уже даёт
+# прогноз >= порога — замер прекращается досрочно, узел берётся сразу.
+#
 # Переменные окружения (задаются в run):
 #   STALL_WATCHDOG   0/1            — выключатель сторожа
 #   STALL_TIMEOUT    сек            — порог простоя (default 10)
 #   MIN_SPEED_KB     КБ/с           — порог «достаточной» скорости (default 500, 0 = максимум)
 #   TEST_TIMEOUT     сек            — таймаут замера скорости одного узла (default 6)
+#   EARLY_SAMPLE     сек            — интервал прогноза скорости (default 1, 0 = без прогноза)
 #   SPEED_URL        url            — файл для закачки
 #   MIXED_PORT       порт           — mixed-порт mihomo
 #   API_HOST / API_PORT             — REST API mihomo
@@ -32,6 +36,12 @@ TEST_TIMEOUT="${TEST_TIMEOUT//\"/}"
 TEST_TIMEOUT="${TEST_TIMEOUT//[^0-9]/}"
 [ -n "$TEST_TIMEOUT" ] || TEST_TIMEOUT=6
 
+# Прогноз скорости по первым N секундам закачки (0 = качать до конца)
+EARLY_SAMPLE="${EARLY_SAMPLE:-1}"
+EARLY_SAMPLE="${EARLY_SAMPLE//\"/}"
+EARLY_SAMPLE="${EARLY_SAMPLE//[^0-9]/}"
+[ -n "$EARLY_SAMPLE" ] || EARLY_SAMPLE=1
+
 SPEED_URL="${SPEED_URL:-https://speed.cloudflare.com/__down?bytes=2000000}"
 SPEED_URL="${SPEED_URL//\"/}"
 MIXED_PORT="${MIXED_PORT:-7890}"
@@ -49,16 +59,19 @@ if [ "$STALL_ENABLED" != "1" ] && [ "$STALL_ENABLED" != "true" ]; then
     exit 0
 fi
 
-bashio::log.info "Сторож простоя запущен: timeout=${STALL_TIMEOUT}s, min_speed=${MIN_SPEED_KB}КБ/с, test_timeout=${TEST_TIMEOUT}s, url=${SPEED_URL}"
+bashio::log.info "Сторож простоя запущен: timeout=${STALL_TIMEOUT}s, min_speed=${MIN_SPEED_KB}КБ/с, test_timeout=${TEST_TIMEOUT}s, early_sample=${EARLY_SAMPLE}s, url=${SPEED_URL}"
 
 STALL_COUNT=0
 LAST_TOTAL=""
 
 api_get() { curl -fsS --max-time 5 "$API$1" 2>/dev/null; }
 
-# Скорость узла в байт/с через mixed-порт (0 = не смог)
+# Скорость узла в байт/с через mixed-порт (0 = не смог).
+# Если MIN_SPEED_KB > 0 и EARLY_SAMPLE > 0: через EARLY_SAMPLE секунд
+# считается прогноз (байты/прошедшее время); если прогноз уже >= порога —
+# закачка прерывается досрочно, возвращается прогноз.
 measure_node() {
-    local node="$1" out size speed
+    local node="$1" out pid size elapsed projected
     # переключаем PROXY на узел и качаем тестовый файл
     if ! curl -fsS --max-time 5 -X PUT "$API/proxies/PROXY" \
         -d "{\"name\":\"$node\"}" >/dev/null 2>&1; then
@@ -66,10 +79,31 @@ measure_node() {
         echo 0; return
     fi
     out=$(mktemp)
-    curl -fsS --max-time "$TEST_TIMEOUT" -x "http://127.0.0.1:${MIXED_PORT}" "$SPEED_URL" -o "$out" 2>/dev/null
+    curl -fsS --max-time "$TEST_TIMEOUT" -x "http://127.0.0.1:${MIXED_PORT}" "$SPEED_URL" -o "$out" 2>/dev/null &
+    pid=$!
+
+    if [ "$EARLY_SAMPLE" -gt 0 ] && [ "$MIN_SPEED_KB" -gt 0 ]; then
+        # ранний прогноз: проверяем темп каждые EARLY_SAMPLE секунд
+        while kill -0 "$pid" 2>/dev/null; do
+            sleep "$EARLY_SAMPLE"
+            kill -0 "$pid" 2>/dev/null || break
+            size=$(stat -c%s "$out" 2>/dev/null || echo 0)
+            projected=$((size / EARLY_SAMPLE))
+            if [ "$projected" -ge $((MIN_SPEED_KB * 1024)) ]; then
+                kill "$pid" 2>/dev/null
+                wait "$pid" 2>/dev/null
+                rm -f "$out"
+                bashio::log.info "Прогноз через ${EARLY_SAMPLE}s уже >= порога (${projected} байт/с) — тест узла $node досрочно завершен"
+                echo "$projected"
+                return
+            fi
+        done
+        # узел не дотянул по прогнозу — докачиваем до конца таймаута для точного замера
+    fi
+
+    wait "$pid" 2>/dev/null
     size=$(stat -c%s "$out" 2>/dev/null || echo 0)
     rm -f "$out"
-    # округляем до целых байт/с от фактического времени
     speed=$((size / TEST_TIMEOUT))
     echo "$speed"
 }

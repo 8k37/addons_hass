@@ -286,6 +286,7 @@ if [ "$(bashio::config 'subscriptions // [] | length' 2>/dev/null || echo 0)" -g
         STALL_TIMEOUT="$(bashio::config 'stall_timeout' 10)" \
         MIN_SPEED_KB="$(bashio::config 'stall_min_speed' 500)" \
     TEST_TIMEOUT="$(bashio::config 'stall_test_timeout' 6)" \
+    EARLY_SAMPLE="$(bashio::config 'stall_early_sample' 1)" \
         HC_URL="${HC_URL}" \
         SPEED_URL="$(bashio::config 'speedtest_url' 'https://speed.cloudflare.com/__down?bytes=2000000')" \
         CONFIG_FILE="${CONFIG_FILE}" \
