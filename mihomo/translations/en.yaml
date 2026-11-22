@@ -23,6 +23,9 @@ configuration:
   speedtest_url:
     name: Speed test URL
     description: File downloaded through the node during the speed test. 2–10 MB recommended.
+  stall_emergency_after:
+    name: Emergency switch after (triggers)
+    description: If this many triggers in a row leave traffic stalled, nodes are switched blindly without measurement, in round-robin. 0 — disable.
   config_file:
     name: Mihomo config path
     description: Core configuration file (normally no need to change).

@@ -301,6 +301,7 @@ if [ "$(bashio::config 'subscriptions // [] | length' 2>/dev/null || echo 0)" -g
         SPEED_URL="$(bashio::config 'speedtest_url' 'https://speed.cloudflare.com/__down?bytes=2000000')" \
         CONFIG_FILE="${CONFIG_FILE}" \
         CACHE_TTL="$(bashio::config 'stall_cache_ttl_sec' 600)" \
+        EMERGENCY_AFTER="$(bashio::config 'stall_emergency_after' 10)" \
         bash /etc/mihomo/stall_watchdog.sh &
         WATCHDOG_PID=$!
         bashio::log.info "Сторож трафика запущен."

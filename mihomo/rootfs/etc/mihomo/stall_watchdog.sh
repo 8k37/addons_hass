@@ -21,6 +21,8 @@
 #   MIXED_PORT       порт           — mixed-порт mihomo
 #   API_HOST / API_PORT             — REST API mihomo
 #   CACHE_TTL       сек            — сколько хранить результаты замеров (default 600, 0 = без кэша)
+#   EMERGENCY_AFTER срабатываний   — после стольких срабатываний подряд без результата
+#                                    узел меняется вслепую, без замера (default 10, 0 = выкл)
 # ==============================================================================
 
 STALL_ENABLED="${STALL_WATCHDOG:-1}"
@@ -83,6 +85,32 @@ CACHE_TTL="${CACHE_TTL:-600}"
 CACHE_TTL="${CACHE_TTL//\"/}"
 CACHE_TTL="${CACHE_TTL//[^0-9]/}"
 [ -n "$CACHE_TTL" ] || CACHE_TTL=600
+
+# Аварийное переключение: если EMERGENCY_AFTER срабатываний подряд трафик
+# так и не ожил (замеры врут, а реальные соединения не идут) — хватит мерить:
+# ставим другой узел сразу, без замера. Серия хранится в файле-состоянии.
+EMERGENCY_AFTER="${EMERGENCY_AFTER:-10}"
+EMERGENCY_AFTER="${EMERGENCY_AFTER//\"/}"
+EMERGENCY_AFTER="${EMERGENCY_AFTER//[^0-9]/}"
+[ -n "$EMERGENCY_AFTER" ] || EMERGENCY_AFTER=10
+
+STATE_FILE="${STATE_FILE:-/etc/mihomo/.stall_state}"
+
+state_get() {
+    head -n1 "$STATE_FILE" 2>/dev/null | tr -dc '0-9'
+}
+
+state_get_recent() {
+    tail -n1 "$STATE_FILE" 2>/dev/null
+}
+
+state_set() {
+    printf '%s\n%s\n' "$1" "$(state_get_recent)" > "$STATE_FILE" 2>/dev/null || true
+}
+
+state_set_recent() {
+    printf '%s\n%s\n' "$(state_get)" "$1" > "$STATE_FILE" 2>/dev/null || true
+}
 
 if [ "$STALL_ENABLED" != "1" ] && [ "$STALL_ENABLED" != "true" ]; then
     bashio::log.info "Сторож простоя отключен (stall_watchdog=false)"
@@ -205,6 +233,24 @@ switch_and_retest() {
     curl -fsS --max-time 30 "${CURL_AUTH[@]}" "$API/group/AUTO/delay?url=$(printf '%s' 'https://www.gstatic.com/generate_204' | sed 's/:/%3A/; s@/@%2Fg')" >/dev/null 2>&1 || true
 }
 
+# Аварийный выбор: узел, отличный от текущего и от последних аварийных,
+# без какого-либо замера
+emergency_pick() {
+    local recent="$1" node pass
+    for pass in 1 2; do
+        while IFS= read -r node; do
+            [ -n "$node" ] || continue
+            is_group_name "$node" && continue
+            [ "$node" = "$cur" ] && continue
+            if [ "$pass" -eq 1 ]; then
+                case "|$recent|" in *"|$node|"*) continue ;; esac
+            fi
+            printf '%s' "$node"; return 0
+        done <<< "$nodes"
+    done
+    return 1
+}
+
 is_group_name() {
     case "$1" in
         PROXY|AUTO|FASTEST|DIRECT|REJECT|GLOBAL|PROVIDER|PASS|REJECT-DROP|COMPATIBLE|dtg|Name) return 0 ;;
@@ -240,6 +286,8 @@ while true; do
     # иначе даже «ползущий» счётчик считается простоем
     if [ "$delta" -lt 0 ] || [ "$delta" -ge $((STALL_FLOOR_KB * 1024)) ]; then
         STALL_COUNT=0
+        # трафик ожил — серия подозрительных срабатываний прервана
+        [ "$(state_get)" = "0" ] 2>/dev/null || state_set 0
         continue
     fi
 
@@ -250,6 +298,24 @@ while true; do
     STALL_COUNT=0
 
     bashio::log.warning "Входящий трафик (download) стоит ${STALL_TIMEOUT}s при $nconn прокси-подключениях — тест скорости узлов"
+
+    # Аварийный режим: серия срабатываний без результата — меняем узел вслепую
+    if [ "$EMERGENCY_AFTER" -gt 0 ] 2>/dev/null && [ "$(state_get)" -ge "$EMERGENCY_AFTER" ] 2>/dev/null; then
+        recent=$(state_get_recent)
+        if emerg_node=$(emergency_pick "$recent"); then
+            bashio::log.warning "АВАРИЙНОЕ ПЕРЕКЛЮЧЕНИЕ: ${EMERGENCY_AFTER} срабатываний подряд без результата — ставлю ${emerg_node} без теста"
+            switch_and_retest "$emerg_node"
+            # помним последние 5 аварийных выборов — не прыгаем по кругу между двумя узлами
+            _IFS=$IFS; IFS='|'; read -ra _rl <<< "$recent"; IFS=$_IFS
+            case "|$recent|" in *"|$emerg_node|"*) : ;; *) _rl+=("$emerg_node") ;; esac
+            [ "${#_rl[@]}" -gt 5 ] && _rl=("${_rl[@]: -5}")
+            _IFS=$IFS; IFS='|'; recent="${_rl[*]}"; IFS=$_IFS
+            state_set_recent "$recent"
+            state_set 0
+            LAST_TOTAL=""
+            continue
+        fi
+    fi
 
     # кандидаты: узлы группы PROXY
     group_json=$(api_get "/proxies/PROXY" 2>/dev/null || true)
@@ -268,6 +334,7 @@ while true; do
         if [ "$speed" -ge $((MIN_SPEED_KB * 1024)) ]; then
             bashio::log.info "Кэш: ${cached} подтвержден (${speed} байт/с) — переключаюсь"
             switch_and_retest "$cached"
+            state_set 0
             LAST_TOTAL=""
             continue
         fi
@@ -310,13 +377,17 @@ while true; do
 
     if [ -n "$chosen" ]; then
         node=$chosen
+        state_set 0   # нормальное срабатывание: узел дотянул — серия прервана
     elif [ -n "$best_node" ]; then
         node=$best_node
+        # подозрительное срабатывание: ни один узел не дотянул — копим серию
+        state_set $(( $(state_get) + 1 ))
         if [ "$MIN_SPEED_KB" -gt 0 ] && [ "$best_speed" -lt $((MIN_SPEED_KB * 1024)) ]; then
-            bashio::log.warning "Никто не дотянул до ${MIN_SPEED_KB} КБ/с — переключаю на самого быстрого: $node ($best_speed байт/с)"
+            bashio::log.warning "Никто не дотянул до ${MIN_SPEED_KB} КБ/с — переключаю на самого быстрого: $node ($best_speed байт/с) [серия: $(state_get)]"
         fi
     else
         bashio::log.warning "Кандидатов для теста не нашлось"
+        state_set $(( $(state_get) + 1 ))
         continue
     fi
 
