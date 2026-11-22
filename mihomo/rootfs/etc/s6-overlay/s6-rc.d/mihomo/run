@@ -9,12 +9,6 @@ CONFIG_DIR="$(dirname "${CONFIG_FILE}")"
 # ЧЕРЕЗ узел, поэтому нужен сайт, доступный из-за рубежа: gstatic generate_204
 HC_URL="$(bashio::config 'healthcheck_url' 'https://www.gstatic.com/generate_204')"
 
-# Выключатель демона: enabled=false — ядро не запускается, трафик идёт напрямую
-if ! bashio::config.true 'enabled'; then
-    bashio::log.warning "Аддон выключен (enabled=false) — mihomo не запускается, трафик идёт напрямую."
-    bashio::log.warning "Включите переключатель enabled в настройках аддона и перезапустите его, чтобы вернуть прокси."
-    sleep infinity
-fi
 
 mkdir -p "${CONFIG_DIR}"
 
@@ -281,4 +275,22 @@ EOF
     fi
 fi
 
-exec mihomo -d "${CONFIG_DIR}" -f "${CONFIG_FILE}"
+# Запуск ядра в фоне + сторож «зависшего» трафика
+mihomo -d "${CONFIG_DIR}" -f "${CONFIG_FILE}" &
+MIHOMO_PID=$!
+
+# Сторож имеет смысл только если есть что менять (подписки/VPN)
+if [ "$(bashio::config 'subscriptions // [] | length' 2>/dev/null || echo 0)" -gt 0 ] \
+   || [ "$(bashio::config 'vpns // [] | length' 2>/dev/null || echo 0)" -gt 0 ]; then
+    if bashio::config.true 'stall_watchdog' 2>/dev/null; then
+        STALL_TIMEOUT="$(bashio::config 'stall_timeout' 10)" \
+        HC_URL="${HC_URL}" \
+        CONFIG_FILE="${CONFIG_FILE}" \
+        bash /etc/mihomo/stall_watchdog.sh &
+        WATCHDOG_PID=$!
+        bashio::log.info "Сторож трафика запущен (порог stall_timeout=$(bashio::config 'stall_timeout' 10) с)."
+    fi
+fi
+
+trap '[ -n "${WATCHDOG_PID:-}" ] && kill "${WATCHDOG_PID}" 2>/dev/null; kill "${MIHOMO_PID}" 2>/dev/null' TERM INT
+wait "${MIHOMO_PID}"
