@@ -288,13 +288,13 @@ sub_refresh_do() {
 }
 
 # Вызывается при пустом PROXY. Защиты: lock от параллельного запуска,
-# не чаще раза в минуту (после 5 неудач — раз в 5 минут).
+# не чаще раза в 10 секунд (после 5 неудач — раз в минуту).
 sub_recover() {
     local now=$(date +%s)
     local fails=$(cat "$SUB_FAIL_FILE" 2>/dev/null); case "$fails" in ''|*[!0-9]*) fails=0;; esac
     local last=$(cat "$SUB_LAST_FILE" 2>/dev/null); case "$last" in ''|*[!0-9]*) last=0;; esac
-    local cooldown=60
-    [ "$fails" -ge 5 ] && cooldown=300
+    local cooldown=10
+    [ "$fails" -ge 5 ] && cooldown=60
     [ $((now - last)) -lt "$cooldown" ] && return 0
     echo "$now" > "$SUB_LAST_FILE"
 
