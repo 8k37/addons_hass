@@ -87,18 +87,9 @@ if [ -n "${SUBS}" ] || [ "${VPNS_N}" -gt 0 ]; then
         while IFS= read -r url; do
             [ -z "${url}" ] && continue
             name="sub${idx}"
-            cat > "/tmp/${name}.yaml" <<EOF
-type: http
-url: "${url}"
-interval: 21600
-path: "./providers/${name}.yaml"
-proxy: DIRECT
-health-check:
-  enable: true
-  url: "${HC_URL}"
-  interval: 1800
-EOF
-            yq -i ".proxy-providers.\"${name}\" = load(\"/tmp/${name}.yaml\")" "${CONFIG_FILE}"
+            # ВАЖНО: yq v4 load() не работает в in-place режиме (ошибка «write in
+            # place flag only applicable...»), поэтому провайдер пишем инлайном
+            yq -i ".proxy-providers.\"${name}\" = {\"type\": \"http\", \"url\": \"${url}\", \"interval\": 21600, \"path\": \"./providers/${name}.yaml\", \"proxy\": \"DIRECT\", \"health-check\": {\"enable\": true, \"url\": \"${HC_URL}\", \"interval\": 1800}}" "${CONFIG_FILE}"
             bashio::log.info "Подписка ${name}: ${url}"
             idx=$((idx+1))
         done <<EOF2
