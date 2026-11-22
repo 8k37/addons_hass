@@ -11,6 +11,9 @@ TIMEOUT="${STALL_TIMEOUT:-10}"
 HC_URL="${HC_URL:-https://www.gstatic.com/generate_204}"
 # URL для замера РЕАЛЬНОЙ скорости (файл, который можно скачать через узел)
 SPEED_URL="${SPEED_URL:-https://speed.cloudflare.com/__down?bytes=2000000}"
+# минимально приемлемая скорость узла, КБ/с: первый кандидат, чья скорость
+# закачки ≥ порога, выбирается сразу, без теста остальных (0 = всегда искать максимум)
+MIN_SPEED_KB="${MIN_SPEED_KB:-500}"
 # локальный порт mihomo, через который гоняется тестовая закачка
 PROXY_PORT="${PROXY_PORT:-7890}"
 
@@ -29,7 +32,7 @@ until curl -sf --max-time 3 "${auth[@]}" "${API}/version" >/dev/null 2>&1; do
     [ "${i}" -gt 120 ] && exit 0
     sleep 1
 done
-bashio::log.info "Сторож трафика работает (порог: ${TIMEOUT} с без данных при активных подключениях; выбор узла — по скорости закачки через ${SPEED_URL})."
+bashio::log.info "Сторож трафика работает (порог: ${TIMEOUT} с без данных при активных подключениях; выбор узла — первый со скоростью закачки ≥ ${MIN_SPEED_KB} КБ/с через ${SPEED_URL})."
 
 LAST_TOTAL="-1"
 STALL=0
@@ -63,7 +66,8 @@ while true; do
     # сработал порог — меняем узел
     STALL=0
     LAST_TOTAL="-1"
-    bashio::log.warning "Подключений: ${NCOUNT}, но трафика нет ${TIMEOUT} с — меняю узел."
+    MIN_BYTES=$((MIN_SPEED_KB * 1024))
+    bashio::log.warning "Подключений: ${NCOUNT}, но трафика нет ${TIMEOUT} с — меняю узел (порог скорости: ${MIN_SPEED_KB} КБ/с)."
 
     # Готовим кандидатов и тестируем РЕАЛЬНУЮ СКОРОСТЬ каждого: узел
     # временно становится активным в PROXY, через mixed-порт качается
@@ -102,6 +106,11 @@ while true; do
             BEST_SPEED="${SPEED}"
             BEST="${cand}"
         fi
+        # достаточная скорость — берём сразу, остальных не тестируем
+        if [ "${MIN_BYTES}" -gt 0 ] && [ "${SPEED}" -ge "${MIN_BYTES}" ]; then
+            bashio::log.info "${cand}: ${SPEED} байт/с ≥ ${MIN_BYTES} байт/с — подходит, тест остальных не нужен."
+            break
+        fi
     done <<<"${CANDIDATES}"
 
     # ни у кого не мерили (все «мёртвые» по истории) — берём первого кандидата
@@ -111,7 +120,11 @@ while true; do
 
     if curl -sf --max-time 3 -X PUT "${auth[@]}" -H "Content-Type: application/json" \
             "${API}/proxies/PROXY" -d "{\"name\": \"${BEST}\"}" >/dev/null 2>&1; then
-        bashio::log.warning "PROXY переключен на самый быстрый узел: ${BEST} (${BEST_SPEED} байт/с). Перезапускаю проверку группы AUTO."
+        if [ "${BEST_SPEED}" -ge "${MIN_BYTES}" ]; then
+            bashio::log.warning "PROXY переключен на ${BEST} (${BEST_SPEED} байт/с, порог ${MIN_SPEED_KB} КБ/с выполнен). Перезапускаю проверку группы AUTO."
+        else
+            bashio::log.warning "Никто не дотянул до ${MIN_SPEED_KB} КБ/с — PROXY переключен на самого быстрого: ${BEST} (${BEST_SPEED} байт/с). Перезапускаю проверку группы AUTO."
+        fi
         # форсируем url-test, чтобы не ждать очередного интервала
         curl -sf --max-time 30 -G "${auth[@]}" "${API}/group/AUTO/delay" \
             --data-urlencode "url=${HC_URL}" --data-urlencode "timeout=5000" \
