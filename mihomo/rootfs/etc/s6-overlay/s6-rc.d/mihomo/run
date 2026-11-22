@@ -9,6 +9,13 @@ CONFIG_DIR="$(dirname "${CONFIG_FILE}")"
 # ЧЕРЕЗ узел, поэтому нужен сайт, доступный из-за рубежа: gstatic generate_204
 HC_URL="$(bashio::config 'healthcheck_url' 'https://www.gstatic.com/generate_204')"
 
+# Выключатель демона: enabled=false — ядро не запускается, трафик идёт напрямую
+if ! bashio::config.true 'enabled'; then
+    bashio::log.warning "Аддон выключен (enabled=false) — mihomo не запускается, трафик идёт напрямую."
+    bashio::log.warning "Включите переключатель enabled в настройках аддона и перезапустите его, чтобы вернуть прокси."
+    sleep infinity
+fi
+
 mkdir -p "${CONFIG_DIR}"
 
 # При первом запуске создаём конфиг по умолчанию
