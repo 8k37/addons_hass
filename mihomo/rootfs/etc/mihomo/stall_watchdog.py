@@ -32,6 +32,12 @@
 #   CACHE_TTL        сек            — сколько хранить результаты замеров (default 600, 0 = без кэша)
 #   EMERGENCY_AFTER  срабатываний   — после стольких срабатываний подряд без результата
 #                                    узел меняется вслепую, без замера (default 10, 0 = выкл)
+#   PRE_TEST_DELAY   сек            — пауза после срабатывания простоя перед тестом
+#                                    скорости; если во время паузы трафик ожил сам —
+#                                    проверка отменяется (default 10, 0 = без паузы)
+#   POST_SWITCH_DELAY сек           — пауза после переключения на выбранный узел,
+#                                    чтобы дать ему раскачаться до возобновления
+#                                    мониторинга (default 10, 0 = без паузы)
 # ==============================================================================
 
 import json
@@ -97,6 +103,8 @@ GROUP_NAME = env_str("GROUP_NAME", "PROXY")
 CACHE_FILE = env_str("CACHE_FILE", "/etc/mihomo/.stall_speed_cache")
 CACHE_TTL = env_int("CACHE_TTL", 600)
 EMERGENCY_AFTER = env_int("EMERGENCY_AFTER", 10)
+PRE_TEST_DELAY = env_int("PRE_TEST_DELAY", 10)
+POST_SWITCH_DELAY = env_int("POST_SWITCH_DELAY", 10)
 STATE_FILE = env_str("STATE_FILE", "/etc/mihomo/.stall_state")
 EMPTY_CHECK_INTERVAL = env_int("EMPTY_CHECK_INTERVAL", 10)
 
@@ -521,6 +529,28 @@ def main():
             "при %d прокси-подключениях — тест скорости узлов"
             % (STALL_FLOOR_BPS, STALL_TIMEOUT, nconn))
 
+        # Пауза перед тестом: узел мог просто «подтупить». Если трафик ожил
+        # сам во время паузы — проверка отменяется, тест не запускаем.
+        if PRE_TEST_DELAY > 0:
+            revived = False
+            log("INFO", "Пауза %d с перед тестом: вдруг трафик оживет сам..."
+                % PRE_TEST_DELAY)
+            for _ in range(PRE_TEST_DELAY):
+                time.sleep(1)
+                try:
+                    d = api("GET", "/connections").get("downloadTotal") or 0
+                    if d > now_total:
+                        revived = True
+                        break
+                except Exception:
+                    pass
+            if revived:
+                log("OK", "Трафик ожил сам во время паузы — тест отменен")
+                stall = 0
+                continue
+            log("INFO", "Трафик не ожил за %d с — запускаю проверку узлов"
+                % PRE_TEST_DELAY)
+
         g = api_group_read()
         if g is None:
             log("WARNING", "API не ответил на /proxies/%s (порт/секрет?) — пропускаю цикл"
@@ -649,6 +679,12 @@ def main():
 
         log("INFO", "Переключаю %s на %s" % (GROUP_NAME, node))
         switch_and_retest(node)
+        # Дать новому узлу раскачаться: после переключения ждем
+        # POST_SWITCH_DELAY секунд до возобновления мониторинга простоя.
+        if POST_SWITCH_DELAY > 0:
+            log("INFO", "Пауза %d с после переключения — даю узлу раскачаться"
+                % POST_SWITCH_DELAY)
+            time.sleep(POST_SWITCH_DELAY)
         last_total = None  # следующий цикл считает простой заново
 
 

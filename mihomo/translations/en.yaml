@@ -26,6 +26,12 @@ configuration:
   stall_emergency_after:
     name: Emergency switch after (triggers)
     description: If this many triggers in a row leave traffic stalled, nodes are switched blindly without measurement, in round-robin. 0 — disable.
+  stall_pre_test_delay_sec:
+    name: Pre-test pause (seconds)
+    description: Wait this many seconds after a stall trigger; if traffic revives on its own, the check is cancelled. 0 — disable.
+  stall_post_switch_delay_sec:
+    name: Post-switch pause (seconds)
+    description: Give the newly selected node this many seconds to warm up before the watchdog resumes monitoring. 0 — disable.
   config_file:
     name: Mihomo config path
     description: Core configuration file (normally no need to change).
