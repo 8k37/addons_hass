@@ -579,11 +579,37 @@ def main():
                     % (cached, speed))
                 cache.pop(cached, None)
 
-        # порядок теста: сначала узлы, которые по кэшу были быстрыми
+        # Шаг 1 (повторяет ручную процедуру): групповой health-check — ядро
+        # само меряет задержку всех узлов параллельно одним запросом. Живых
+        # тестируем скоростью, мёртвых пропускаем — вместо перебора всех
+        # кандидатов замерами по TEST_TIMEOUT секунд.
         order = [n for n in nodes if n and n not in GROUP_NAMES and n != cur]
+        delays = {}
+        try:
+            hcq = urllib.parse.quote(HC_URL, safe="")
+            raw = api("GET", "/group/%s/delay?url=%s&timeout=5000"
+                      % (urllib.parse.quote(GROUP_NAME), hcq), timeout=30)
+            delays = {n: d for n, d in (raw or {}).items()
+                      if isinstance(d, int) and d > 0}
+        except Exception:
+            delays = {}
+        if delays:
+            alive = [n for n in order if n in delays]
+            log("INFO", "Групповая проверка: %d/%d узлов отвечают — "
+                "скорость меряю только у них" % (len(alive), len(order)))
+            order = sorted(alive, key=lambda n: delays[n])
+        elif len(order) > 30:
+            log("WARNING", "Групповая проверка: не ответил ни один узел — "
+                "сервер(ы) подписки недоступны или сеть до них лежит. "
+                "Спринт скорости не запускаю (все замеры дали бы 0)")
+            cache_save(cache)
+            continue
+        else:
+            log("WARNING", "Групповая проверка не удалась — тестирую скоростью весь список (%d)" % len(order))
         SPRINT_ACTIVE = True
         log("INFO", "Запуск теста скорости: %d кандидат(ов)" % len(order))
-        order = sorted(order, key=lambda n: -cache.get(n, (0, 0))[0])
+        if not delays:
+            order = sorted(order, key=lambda n: -cache.get(n, (0, 0))[0])
         best_node, best_speed, chosen = "", 0, ""
         for node in order:
             if not node or node in GROUP_NAMES or node == cur:
