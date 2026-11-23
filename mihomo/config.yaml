@@ -1,6 +1,6 @@
 # Home Assistant Add-on: Mihomo (Clash Meta)
 name: Mihomo
-version: "1.12.13"
+version: "1.12.14"
 slug: mihomo
 description: Mihomo (Clash Meta) proxy core — HTTP/SOCKS5 прокси и внешняя панель управления
 url: https://github.com/MetaCubeX/mihomo
