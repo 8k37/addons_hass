@@ -146,6 +146,18 @@ def api_group_read():
     return {}
 
 
+def group_data(g):
+    """Достаёт данные группы из ответа API. Одиночный GET /proxies/<name>
+    возвращает объект группы НАПРЯМУЮ ("all" в корне), массовый GET /proxies
+    кладёт группы под ключом "proxies". Раньше код всегда ждал обёртку
+    "proxies" и считал непустую группу пустой."""
+    if not g:
+        return {}
+    if "all" in g or g.get("type"):
+        return g
+    return (g.get("proxies") or {}).get(GROUP_NAME) or {}
+
+
 # ------------------------------------------------------------- замер скорости ---
 def measure_node(node):
     """Скорость узла в байт/с через mixed-порт (0 = не смог).
@@ -355,7 +367,7 @@ def sub_recover():
     time.sleep(10)  # дать mihomo скачать и применить подписку
 
     g = api_group_read()
-    nodes = ((g or {}).get("proxies") or {}).get(GROUP_NAME) or {}
+    nodes = group_data(g)
     if nodes.get("all"):
         log("INFO", "В %s появились узлы (%d) — подписка восстановилась после автообновления"
             % (GROUP_NAME, len(nodes["all"])))
@@ -419,7 +431,7 @@ def main():
                 last_empty_check = time.time()
                 g = api_group_read()
                 if g is not None:
-                    pdata = (g.get("proxies") or {}).get(GROUP_NAME) or {}
+                    pdata = group_data(g)
                     if not (pdata.get("all")):
                         log("WARNING", "В группе %s нет ни одного узла "
                             "(подключений нет — по трафику не сработать) — "
@@ -456,7 +468,7 @@ def main():
             log("WARNING", "API не ответил на /proxies/%s (порт/секрет?) — пропускаю цикл"
                 % GROUP_NAME)
             continue
-        pdata = (g.get("proxies") or {}).get(GROUP_NAME) or {}
+        pdata = group_data(g)
         nodes = pdata.get("all") or []
         cur = pdata.get("now") or ""
         if not nodes:
