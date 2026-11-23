@@ -380,6 +380,7 @@ SPRINT_ACTIVE = False  # идет ли сейчас тест скорости (�
 
 
 def main():
+    global SPRINT_ACTIVE
     if not STALL_ENABLED:
         log("INFO", "Сторож простоя отключен (stall_watchdog=false)")
         return
@@ -486,7 +487,7 @@ def main():
         # завершился, новый не стартует (и кэш-проверка, и полный спринт)
         if SPRINT_ACTIVE:
             log("INFO", "Тест скорости уже выполняется — повторный запуск отложен до его завершения")
-            time.sleep(CHECK_INTERVAL)
+            time.sleep(1)  # тик основного цикла: ждём завершения предыдущего теста
             continue
 
         # Быстрый путь: в кэше есть свежий подходящий узел — быстрый замер
