@@ -615,6 +615,12 @@ def main():
         # тестируем скоростью, мёртвых пропускаем — вместо перебора всех
         # кандидатов замерами по TEST_TIMEOUT секунд.
         order = [n for n in nodes if n and n not in GROUP_NAMES and n != cur]
+        if not order:
+            log("WARNING", "Кандидатов нет (группа пуста или состоит из служебных имен) — "
+                "запускаю встроенный health-check провайдеров")
+            sub_recover()
+            cache_save(cache)
+            continue
         delays = {}
         try:
             hcq = urllib.parse.quote(DELAY_URL, safe="")
@@ -632,7 +638,9 @@ def main():
         elif len(order) > 30:
             log("WARNING", "Групповая проверка: не ответил ни один узел — "
                 "сервер(ы) подписки недоступны или сеть до них лежит. "
-                "Спринт скорости не запускаю (все замеры дали бы 0)")
+                "Спринт скорости не запускаю (все замеры дали бы 0) — "
+                "запускаю встроенный health-check провайдеров")
+            sub_recover()
             cache_save(cache)
             continue
         else:
@@ -672,9 +680,10 @@ def main():
                 log("WARNING", "Никто не дотянул до %d байт/с — переключаю на самого быстрого: "
                     "%s (%d байт/с) [серия: %d]" % (MIN_SPEED_BPS, node, best_speed, counter + 1))
         else:
-            log("WARNING", "Кандидатов для теста не нашлось")
-            counter, _ = state_read()
-            state_write(counter + 1, recent)
+            log("WARNING", "Кандидатов для теста не нашлось — запускаю встроенный "
+                "health-check провайдеров и повторю тест после него")
+            sub_recover()
+            cache_save(cache)
             continue
 
         log("INFO", "Переключаю %s на %s" % (GROUP_NAME, node))
