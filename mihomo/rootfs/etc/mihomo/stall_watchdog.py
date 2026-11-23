@@ -92,6 +92,7 @@ SOCKS_PORT = env_int("SOCKS_PORT", 7891)
 API = "http://%s:%d" % (env_str("API_HOST", "127.0.0.1"), env_int("API_PORT", 9090))
 API_SECRET = env_str("API_SECRET", "")
 HC_URL = env_str("HC_URL", "https://www.gstatic.com/generate_204")
+DELAY_URL = env_str("DELAY_URL", "http://www.gstatic.com/generate_204")
 GROUP_NAME = env_str("GROUP_NAME", "PROXY")
 CACHE_FILE = env_str("CACHE_FILE", "/etc/mihomo/.stall_speed_cache")
 CACHE_TTL = env_int("CACHE_TTL", 600)
@@ -261,7 +262,7 @@ def switch_and_retest(node):
     except Exception:
         pass
     try:
-        url = urllib.parse.quote(HC_URL, safe="")
+        url = urllib.parse.quote(DELAY_URL, safe="")
         api("GET", "/group/%s/delay?url=%s" % (urllib.parse.quote(GROUP_NAME), url),
             timeout=30)
     except Exception:
@@ -586,7 +587,7 @@ def main():
         order = [n for n in nodes if n and n not in GROUP_NAMES and n != cur]
         delays = {}
         try:
-            hcq = urllib.parse.quote(HC_URL, safe="")
+            hcq = urllib.parse.quote(DELAY_URL, safe="")
             raw = api("GET", "/group/%s/delay?url=%s&timeout=5000"
                       % (urllib.parse.quote(GROUP_NAME), hcq), timeout=30)
             delays = {n: d for n, d in (raw or {}).items()
