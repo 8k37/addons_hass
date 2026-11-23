@@ -534,8 +534,17 @@ def main():
             for _ in range(PRE_TEST_DELAY):
                 time.sleep(1)
                 try:
+                    # «Ожил» = входящий за последнюю секунду превысил
+                    # минимальную планку запуска поиска (STALL_FLOOR_BPS),
+                    # а не просто любой прирост байтов
                     d = api("GET", "/connections").get("downloadTotal") or 0
-                    if d > now_total:
+                    gain = d - now_total
+                    now_total = d
+                    if STALL_FLOOR_BPS > 0:
+                        ok = gain >= STALL_FLOOR_BPS
+                    else:
+                        ok = gain > 0
+                    if ok:
                         revived = True
                         break
                 except Exception:
