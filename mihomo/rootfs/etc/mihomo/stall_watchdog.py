@@ -12,7 +12,10 @@
 #
 # Все служебные запросы (REST API, обновление подписок, состояние) идут
 # НАПРЯМУЮ, без прокси — сторож работает даже когда VPN полностью мертв.
-# Через прокси (mixed-порт) идет только замер скорости узла — это намеренно.
+# Через SOCKS5-порт mihomo идет только замер скорости узла — это намеренно.
+# Тест идет сырым сокетом (RFC 1928) вместо urllib по HTTP-прокси: urllib сам
+# строит TLS и на части узлов рукопожатие в CONNECT-туннеле рвется — в итоге
+# живые узлы получают 0 байт/с. SOCKS5 отдает чистый туннель, TLS строим сами.
 #
 # Переменные окружения (задаются в run):
 #   STALL_WATCHDOG   0/1            — выключатель сторожа
@@ -22,7 +25,7 @@
 #   TEST_TIMEOUT     сек            — таймаут замера скорости одного узла (default 6)
 #   EARLY_SAMPLE     сек            — интервал прогноза скорости (default 1, 0 = без прогноза)
 #   SPEED_URL        url            — файл для закачки
-#   MIXED_PORT       порт           — mixed-порт mihomo
+#   SOCKS_PORT       порт           — SOCKS5-порт mihomo (замер скорости через него)
 #   API_HOST / API_PORT / API_SECRET — REST API mihomo
 #   HC_URL           url            — url для group delay после переключения
 #   GROUP_NAME       имя            — группа-селектор, которой управляет сторож
@@ -33,6 +36,9 @@
 
 import json
 import os
+import socket
+import ssl
+import struct
 import sys
 import threading
 import time
@@ -82,6 +88,7 @@ TEST_TIMEOUT = env_int("TEST_TIMEOUT", 6)
 EARLY_SAMPLE = env_int("EARLY_SAMPLE", 1)
 SPEED_URL = env_str("SPEED_URL", "http://speed.cloudflare.com/__down?bytes=2000000")
 MIXED_PORT = env_int("MIXED_PORT", 7890)
+SOCKS_PORT = env_int("SOCKS_PORT", 7891)
 API = "http://%s:%d" % (env_str("API_HOST", "127.0.0.1"), env_int("API_PORT", 9090))
 API_SECRET = env_str("API_SECRET", "")
 HC_URL = env_str("HC_URL", "https://www.gstatic.com/generate_204")
@@ -159,8 +166,39 @@ def group_data(g):
 
 
 # ------------------------------------------------------------- замер скорости ---
+def _socks5_connect(port, host, portnum, timeout):
+    """Живое TCP-соединение к цели через локальный SOCKS5-порт mihomo (RFC 1928).
+    Замена HTTP-CONNECT: urllib по HTTP-прокси сам делает TLS и на части
+    узлов рукопожатие в туннеле рвется — SOCKS5 отдает уже чистый туннель."""
+    sock = socket.create_connection(("127.0.0.1", port), timeout=timeout)
+    try:
+        sock.settimeout(timeout)
+        # приветствие: версия 5, без авторизации
+        sock.sendall(b"\x05\x01\x00")
+        resp = sock.recv(2)
+        if len(resp) < 2 or resp[0] != 5 or resp[1] != 0:
+            raise OSError("SOCKS5: сервер отклонил метод (0x%s)" % resp.hex())
+        # запрос CONNECT, домен передаем строкой (ATYP=3)
+        hostb = host.encode("idna") if any(ord(c) > 127 for c in host) else host.encode()
+        req = b"\x05\x01\x00\x03" + bytes([len(hostb)]) + hostb + struct.pack("!H", portnum)
+        sock.sendall(req)
+        resp = sock.recv(4)
+        if len(resp) < 4 or resp[1] != 0:
+            raise OSError("SOCKS5: CONNECT отклонен (код %s)" % (resp[1:2].hex() if len(resp) > 1 else "?"))
+        # пропускаем остаток адреса в ответе (ATYP + addr + port)
+        atyp = resp[3]
+        skip = {1: 4, 4: 16}.get(atyp)
+        if skip is None:  # домен: сначала читаем длину
+            skip = sock.recv(1)[0]
+        sock.recv(skip + 2)
+        return sock
+    except Exception:
+        sock.close()
+        raise
+
+
 def measure_node(node):
-    """Скорость узла в байт/с через mixed-порт (0 = не смог).
+    """Скорость узла в байт/с через SOCKS5-порт mihomo (0 = не смог).
     Ранний выход: если через EARLY_SAMPLE секунд прогноз уже >= MIN_SPEED_BPS."""
     try:
         api("PUT", "/proxies/" + urllib.parse.quote(GROUP_NAME), {"name": node})
@@ -168,29 +206,48 @@ def measure_node(node):
         log("WARNING", "Не удалось переключиться на %s — скорость 0" % node)
         return 0
 
-    handler = urllib.request.ProxyHandler({
-        "http": "http://127.0.0.1:%d" % MIXED_PORT,
-        "https": "http://127.0.0.1:%d" % MIXED_PORT,
-    })
-    opener = urllib.request.build_opener(handler)
+    parsed = urllib.parse.urlsplit(SPEED_URL)
+    host, portnum = parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)
+    path = parsed.path or "/"
+    if parsed.query:
+        path += "?" + parsed.query
     start = time.monotonic()
     total = 0
+    sock = None
     try:
-        with opener.open(SPEED_URL, timeout=TEST_TIMEOUT) as resp:
-            while True:
-                chunk = resp.read(65536)
-                if not chunk:
-                    break
-                total += len(chunk)
-                elapsed = time.monotonic() - start
-                if EARLY_SAMPLE > 0 and MIN_SPEED_BPS > 0 and elapsed >= EARLY_SAMPLE:
-                    projected = int(total / elapsed)
-                    if projected >= MIN_SPEED_BPS:
-                        log("INFO", "Прогноз через %.0fs уже >= порога (%d байт/с) — "
-                            "тест узла %s досрочно завершен" % (elapsed, projected, node))
-                        return projected
+        sock = _socks5_connect(SOCKS_PORT, host, portnum, TEST_TIMEOUT)
+        if parsed.scheme == "https":
+            ctx = ssl.create_default_context()
+            sock = ctx.wrap_socket(sock, server_hostname=host)
+        req = ("GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: stall-watchdog/1\r\n"
+               "Accept: */*\r\nConnection: close\r\n\r\n" % (path, host)).encode()
+        sock.sendall(req)
+        rfile = sock.makefile("rb")
+        # пропускаем заголовки ответа
+        while True:
+            line = rfile.readline()
+            if not line or line in (b"\r\n", b"\n"):
+                break
+        while True:
+            chunk = rfile.read(65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            elapsed = time.monotonic() - start
+            if EARLY_SAMPLE > 0 and MIN_SPEED_BPS > 0 and elapsed >= EARLY_SAMPLE:
+                projected = int(total / elapsed)
+                if projected >= MIN_SPEED_BPS:
+                    log("INFO", "Прогноз через %.0fs уже >= порога (%d байт/с) — "
+                        "тест узла %s досрочно завершен" % (elapsed, projected, node))
+                    return projected
     except Exception:
         pass
+    finally:
+        if sock is not None:
+            try:
+                sock.close()
+            except Exception:
+                pass
     elapsed = time.monotonic() - start
     if elapsed < 0.5:
         elapsed = 0.5

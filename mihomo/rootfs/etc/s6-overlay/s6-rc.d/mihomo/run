@@ -312,7 +312,7 @@ if [ "$(jq '.subscriptions // [] | length' "${OPTIONS_JSON}" 2>/dev/null || echo
         SPEED_URL="$(bashio::config 'speedtest_url' 'http://speed.cloudflare.com/__down?bytes=2000000')" \
         CACHE_TTL="$(bashio::config 'stall_cache_ttl_sec' 600)" \
         EMERGENCY_AFTER="$(bashio::config 'stall_emergency_after' 10)" \
-        MIXED_PORT="$(bashio::config 'proxy_port' 7890)" \
+        SOCKS_PORT="$(bashio::config 'socks_port' 7891)" \
         API_SECRET="$(yq -r '.secret // ""' "${CONFIG_FILE}" 2>/dev/null || true)" \
         GROUP_NAME="$(yq -r '(.proxy-groups // [])[] | select(.type == "select") | .name' "${CONFIG_FILE}" 2>/dev/null | head -n1)" \
         python3 /etc/mihomo/stall_watchdog.py &
