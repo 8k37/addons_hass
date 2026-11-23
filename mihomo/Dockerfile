@@ -38,13 +38,17 @@ RUN set -eux; \
       -o /usr/local/bin/yq; \
     chmod +x /usr/local/bin/yq
 
-# Веб-панель metacubexd (официальный дашборд mihomo)
+# Веб-панель metacubexd (официальный дашборд mihomo).
+# compressed-dist.tgz — tar.gz, внутри которой файлы лежат в корне (CI собирает
+# через `tar czvf compressed-dist.tgz -C packages/ui/.output/public .`),
+# поэтому распаковываем прямо в /usr/share/mihomo/ui.
 RUN set -eux; \
     mkdir -p /usr/share/mihomo/ui; \
     curl -fsSL \
       "https://github.com/MetaCubeX/metacubexd/releases/download/${METACUBEXD_VERSION}/compressed-dist.tgz" \
       -o /tmp/ui.tgz; \
     tar -xzf /tmp/ui.tgz -C /usr/share/mihomo/ui; \
+    test -f /usr/share/mihomo/ui/index.html; \
     rm -f /tmp/ui.tgz
 
 COPY rootfs /

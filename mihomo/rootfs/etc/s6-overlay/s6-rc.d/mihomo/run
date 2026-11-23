@@ -19,12 +19,18 @@ if [ ! -f "${CONFIG_FILE}" ]; then
     bashio::log.warning "Отредактируйте ${CONFIG_FILE} (добавьте свои прокси) и перезапустите аддон."
 fi
 
-# Панель metacubexd: распаковываем в подпапку конфиг-директории
-# (mihomo разрешает external-ui только внутри home-директории)
+# Панель metacubexd: синхронизируем из образа при КАЖДОМ старте.
+# (mihomo разрешает external-ui только внутри home-директории).
+# Раньше панель копировалась лишь при отсутствии index.html — из-за этого после
+# обновления аддона в /share оставалась СТАРАЯ панель: она несовместима с новым
+# ядром и открывается пустой. Теперь старые файлы удаляются и заливаются новые.
 UI_DIR="${CONFIG_DIR}/ui"
-if [ ! -f "${UI_DIR}/index.html" ]; then
-    bashio::log.info "Устанавливаю веб-панель metacubexd в ${UI_DIR}..."
+if [ ! -f /usr/share/mihomo/ui/index.html ]; then
+    bashio::log.warning "В образе нет файлов панели metacubexd — UI будет недоступен."
+else
+    bashio::log.info "Синхронизирую веб-панель metacubexd в ${UI_DIR}..."
     mkdir -p "${UI_DIR}"
+    rm -rf "${UI_DIR:?}/"*
     cp -r /usr/share/mihomo/ui/. "${UI_DIR}/"
 fi
 
