@@ -483,16 +483,17 @@ def main():
             continue
 
         conns = conn.get("connections") or []
-        # входящий считаем только по подключениям через прокси (последний
-        # элемент chains не DIRECT): прямые соединения (например, GEOIP,RU)
-        # не должны маскировать зависший прокси-узел
-        proxied = [c for c in conns if ((c.get("chains") or [""])[-1] != "DIRECT")]
+        # Входящий считаем по ВСЕМ подключениям (без фильтра по chains):
+        # при мертвой подписке dial до узла падает мгновенно и ядро вообще
+        # не оставляет записи в /connections — с фильтром сторож вечно видел
+        # nconn=0 и молчал, хотя трафик через прокси не шел. DIRECT-соединения
+        # простому не мешают: их download — тот же входящий, который реально
+        # получает пользователь.
+        proxied = conns
         nconn = len(proxied)
         if nconn == 0:
-            stall = 0
             last_total = None
-            # При пустой группе PROXY подключений через прокси не будет вообще,
-            # поэтому пустоту группы проверяем независимо от трафика — раз в
+            # Пустую группу PROXY проверяем независимо от трафика — раз в
             # EMPTY_CHECK_INTERVAL секунд (sub_recover имеет свой cooldown 10с)
             if time.time() - last_empty_check >= EMPTY_CHECK_INTERVAL:
                 last_empty_check = time.time()
@@ -504,25 +505,38 @@ def main():
                             "(подключений нет — по трафику не сработать) — "
                             "запускаю проверку провайдеров" % GROUP_NAME)
                         sub_recover()
-            continue
-
-        now_total = sum(int(c.get("download") or 0) for c in proxied)
-        if last_total is None:
-            last_total = now_total
-            continue
-        delta = now_total - last_total
-        last_total = now_total
-
-        if STALL_FLOOR_BPS > 0:
-            alive = delta >= STALL_FLOOR_BPS
+                        stall = 0
+                        continue
+            # Группа не пуста, а подключений нет: это тоже простой — dial до
+            # мертвого узла падает мгновенно и коннект не попадает в
+            # /connections. Копим тот же счетчик простоя и после STALL_TIMEOUT
+            # проваливаемся в общий путь паузы и теста скорости (ниже).
+            stall += 1
+            if stall < STALL_TIMEOUT:
+                continue
+            log("WARNING", "Подключений нет %d+ с подряд, но группа %s не пуста "
+                "и ядро принимает запросы — похоже, все узлы мертвы (dial error "
+                "без активных коннектов). Тест скорости узлов"
+                % (STALL_TIMEOUT, GROUP_NAME))
+            now_total = 0
         else:
-            alive = delta > 0
-        if alive:
-            stall = 0
-            continue
-        stall += 1
-        if stall < STALL_TIMEOUT:
-            continue
+            now_total = sum(int(c.get("download") or 0) for c in proxied)
+            if last_total is None:
+                last_total = now_total
+                continue
+            delta = now_total - last_total
+            last_total = now_total
+
+            if STALL_FLOOR_BPS > 0:
+                alive = delta >= STALL_FLOOR_BPS
+            else:
+                alive = delta > 0
+            if alive:
+                stall = 0
+                continue
+            stall += 1
+            if stall < STALL_TIMEOUT:
+                continue
 
         # Пауза-подтверждение ДО объявления простоя: узел мог просто
         # «подтупить». Ждём PRE_TEST_DELAY секунд, продолжая следить за
