@@ -536,8 +536,16 @@ def main():
                 try:
                     # «Ожил» = входящий за последнюю секунду превысил
                     # минимальную планку запуска поиска (STALL_FLOOR_BPS),
-                    # а не просто любой прирост байтов
-                    d = api("GET", "/connections").get("downloadTotal") or 0
+                    # а не просто любой прирост байтов. Метрика та же,
+                    # что в основном цикле: сумма download по
+                    # прокси-подключениям (НЕ downloadTotal — тот накопительный
+                    # за всё время работы ядра и несравним с суммой по живым
+                    # подключениям, из-за него пауза всегда «оживала» и тест
+                    # никогда не запускался)
+                    c = api("GET", "/connections")
+                    pconn = [x for x in (c.get("connections") or [])
+                             if ((x.get("chains") or [""])[-1] != "DIRECT")]
+                    d = sum(int(x.get("download") or 0) for x in pconn)
                     gain = d - now_total
                     now_total = d
                     if STALL_FLOOR_BPS > 0:
