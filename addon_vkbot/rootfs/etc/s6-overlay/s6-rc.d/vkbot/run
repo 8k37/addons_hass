@@ -1,0 +1,8 @@
+#!/command/with-contenv sh
+set -e
+
+# Персистентность очереди между перезапусками аддона
+mkdir -p /data/vkbot
+
+cd /app
+exec python3 -u /app/vkbot.py

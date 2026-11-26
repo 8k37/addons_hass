@@ -1,0 +1,37 @@
+name: VK Bot
+version: "1.0.0"
+slug: vkbot
+description: Бот ВКонтакте на Python с очередью отправки сообщений (текст, фото, видео) и HTTP API для Home Assistant
+url: https://github.com/8k37/addons_hass/tree/main/addon_vkbot
+arch:
+  - amd64
+  - aarch64
+  - armv7
+  - armhf
+  - i386
+init: false
+startup: services
+boot: auto
+ports:
+  8099/tcp: 8099
+ports_description:
+  8099/tcp: HTTP API бота (POST /send, GET /health, GET /queue)
+map:
+  - share:rw
+  - media:rw
+options:
+  vk_token: ""
+  api_version: "5.199"
+  default_peer_id: 0
+  http_port: 8099
+  log_level: "info"
+  retry_limit: 5
+  retry_backoff_seconds: 30
+schema:
+  vk_token: str
+  api_version: str
+  default_peer_id: int
+  http_port: port
+  log_level: list(info|debug|warning|error)
+  retry_limit: int(0,)
+  retry_backoff_seconds: int(1,)
