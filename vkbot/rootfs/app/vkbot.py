@@ -64,6 +64,12 @@ class QueueDB:
                 created_at REAL
             )
         """)
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS stats ("
+            " key TEXT PRIMARY KEY,"
+            " value INTEGER NOT NULL DEFAULT 0"
+            ")"
+        )
         self._conn.commit()
 
     def add(self, peer: str, text, photo, video) -> str:
@@ -115,6 +121,25 @@ class QueueDB:
                 )
                 self._conn.commit()
 
+    def bump_stat(self, key: str, n: int = 1) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO stats (key, value) VALUES (?, ?)"
+                " ON CONFLICT(key) DO UPDATE SET value = value + ?",
+                (key, n, n),
+            )
+            self._conn.commit()
+
+    def reset_stats(self) -> None:
+        with self._lock:
+            self._conn.execute("DELETE FROM stats")
+            self._conn.commit()
+
+    def counters(self) -> dict:
+        with self._lock:
+            rows = self._conn.execute("SELECT key, value FROM stats").fetchall()
+        return {r[0]: r[1] for r in rows}
+
     def stats(self) -> dict:
         with self._lock:
             rows = self._conn.execute(
@@ -134,6 +159,37 @@ class QueueDB:
                 "SELECT id, peer, text, error FROM queue WHERE status = 'failed'"
             ).fetchall()
         return [{"id": r[0], "peer": r[1], "text": r[2], "error": r[3]} for r in rows]
+
+    def tasks(self) -> list:
+        """Все задачи очереди для веб-интерфейса."""
+        now = time.time()
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, peer, text, photo, video, attempts, status, error,"
+                " next_attempt_at, created_at FROM queue ORDER BY created_at"
+            ).fetchall()
+        return [
+            {"id": r[0], "peer": r[1], "text": r[2], "photo": r[3], "video": r[4],
+             "attempts": r[5], "status": r[6], "error": r[7],
+             "next_attempt_in": max(0, int(r[8] - now)) if r[6] == "pending" else None,
+             "created_at": int(r[9])}
+            for r in rows
+        ]
+
+    def retry_task(self, task_id: str) -> bool:
+        """Вернуть провалившуюся задачу в очередь с нулём попыток."""
+        with self._lock:
+            cur = self._conn.execute(
+                "UPDATE queue SET status = 'pending', attempts = 0, next_attempt_at = 0,"
+                " error = NULL WHERE id = ? AND status = 'failed'", (task_id,))
+            self._conn.commit()
+        return cur.rowcount > 0
+
+    def delete_task(self, task_id: str) -> bool:
+        with self._lock:
+            cur = self._conn.execute("DELETE FROM queue WHERE id = ?", (task_id,))
+            self._conn.commit()
+        return cur.rowcount > 0
 
 
 DB = QueueDB(DB_PATH)
@@ -244,20 +300,186 @@ def worker(api: VkApi) -> None:
                 params["attachment"] = ",".join(attachments)
             api.call("messages.send", **params)
             DB.mark_sent(task["id"])
+            DB.bump_stat("sent_total")
+            if task["text"]:
+                DB.bump_stat("sent_text")
+            if task["photo"]:
+                DB.bump_stat("sent_photo")
+            if task["video"]:
+                DB.bump_stat("sent_video")
             log("info", f"Отправлено в {task['peer']} (задача {task['id'][:8]})")
         except VkError as e:
             if e.code == 9:  # flood control
                 log("warning", "Flood control, ждём 3с")
                 time.sleep(3)
             DB.mark_retry(task["id"], task["attempts"] + 1, str(e))
+            DB.bump_stat("retry_count")
         except Exception as e:
             log("error", f"Ошибка отправки: {e}")
             DB.mark_retry(task["id"], task["attempts"] + 1, str(e))
+            DB.bump_stat("retry_count")
 
 
 # --------------------------------------------------------------------------
 # HTTP API
 # --------------------------------------------------------------------------
+
+PAGE_HTML = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VK Bot — очередь</title>
+<style>
+:root{--bg:#0f1115;--card:#1a1d24;--fg:#e6e8ee;--mut:#8b93a7;--acc:#4f8cff;--ok:#3fb96f;--err:#e05656;--pend:#d9a53f}
+*{box-sizing:border-box}
+body{margin:0;font:15px/1.5 system-ui,sans-serif;background:var(--bg);color:var(--fg);padding:24px}
+h1{font-size:20px;margin:0 0 4px}
+.sub{color:var(--mut);font-size:13px;margin-bottom:20px}
+.card{background:var(--card);border-radius:12px;padding:16px;margin-bottom:20px}
+.stats{display:flex;gap:28px;flex-wrap:wrap}
+.stat b{font-size:22px;display:block}
+.stat span{color:var(--mut);font-size:12px;text-transform:uppercase;letter-spacing:.05em}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid #262a33;vertical-align:top}
+th{color:var(--mut);font-weight:600;font-size:12px;text-transform:uppercase}
+.badge{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px}
+.badge.pending{background:#3a2f12;color:var(--pend)}
+.badge.failed{background:#3a1616;color:var(--err)}
+label{display:block;color:var(--mut);font-size:12px;margin:10px 0 4px}
+input,textarea{width:100%;background:#12141a;border:1px solid #2a2f3a;border-radius:8px;color:var(--fg);padding:9px 11px;font:inherit}
+textarea{min-height:70px;resize:vertical}
+button{background:var(--acc);border:0;color:#fff;border-radius:8px;padding:10px 18px;font:inherit;font-weight:600;cursor:pointer;margin-top:14px}
+button.ghost{background:transparent;border:1px solid #2a2f3a;color:var(--mut);font-weight:400;padding:4px 9px;margin:0;font-size:12px}
+button:hover{filter:brightness(1.15)}
+#msg{margin-top:10px;font-size:13px;min-height:18px}
+.ok{color:var(--ok)}.err{color:var(--err)}
+.mut{color:var(--mut)}
+.errtext{color:var(--err);font-size:12px;max-width:320px;white-space:pre-wrap}
+.empty{color:var(--mut);padding:12px 0}
+</style>
+</head>
+<body>
+<h1>VK Bot</h1>
+<div class="sub">Очередь сообщений · автообновление каждые 3 с</div>
+
+<div class="card">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+    <div class="stats" id="stats"></div>
+    <button class="ghost" onclick="resetStats()">Сбросить статистику</button>
+  </div>
+</div>
+
+<div class="card stats" id="qstats"></div>
+
+<div class="card">
+  <table id="tbl">
+    <thead><tr><th>ID</th><th>Получатель</th><th>Текст</th><th>Медиа</th><th>Попытки</th><th>Статус</th><th></th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <div class="empty" id="empty" hidden>Очередь пуста</div>
+</div>
+
+<div class="card">
+  <b>Тестовая отправка</b>
+  <form id="send">
+    <label>ID получателя (peer_id)</label>
+    <input id="peer" placeholder="12345 или -200000000001" required>
+    <label>Текст</label>
+    <textarea id="text" placeholder="Сообщение"></textarea>
+    <label>Фото (URL или путь в контейнере, напр. /media/photo.jpg)</label>
+    <input id="photo">
+    <label>Видео (URL или путь)</label>
+    <input id="video">
+    <button type="submit">Поставить в очередь</button>
+    <div id="msg"></div>
+  </form>
+</div>
+
+<script>
+const $=s=>document.querySelector(s);
+function esc(s){return (s??'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function short(s){return s&&s.length>8?s.slice(0,8)+'…':s}
+
+async function refresh(){
+  try{
+    const d=await (await fetch('/api/queue')).json();
+    const st=d.stats||{};
+    $('#qstats').innerHTML=
+      '<div class="stat"><b>'+(st.pending??0)+'</b><span>в очереди</span></div>'+
+      '<div class="stat"><b>'+(st.failed??0)+'</b><span>с ошибками</span></div>';
+    const rows=d.tasks||[];
+    const tb=$('#tbl tbody');tb.innerHTML='';
+    rows.forEach(r=>{
+      const tr=document.createElement('tr');
+      const media=[r.photo?'📷 '+r.photo:null,r.video?'🎬 '+r.video:null].filter(Boolean).join('<br>');
+      tr.innerHTML=
+        '<td class="mut">'+esc(short(r.id))+'</td>'+
+        '<td>'+esc(r.peer)+'</td>'+
+        '<td>'+esc(r.text||'')+'</td>'+
+        '<td class="mut">'+media+'</td>'+
+        '<td>'+r.attempts+'</td>'+
+        '<td><span class="badge '+esc(r.status)+'">'+esc(r.status)+
+          (r.next_attempt_in!=null?' · '+r.next_attempt_in+'с':'')+'</span>'+
+          (r.error?'<div class="errtext">'+esc(r.error)+'</div>':'')+'</td>'+
+        '<td>'+(r.status==='failed'?'<button class="ghost" onclick="retry(\''+r.id+'\')">повтор</button> ':'')+
+          '<button class="ghost" onclick="del(\''+r.id+'\')">✕</button></td>';
+      tb.appendChild(tr);
+    });
+    $('#empty').hidden=rows.length>0;
+  }catch(e){console.error(e)}
+}
+
+async function loadStats(){
+  try{
+    const d=await (await fetch('/api/stats')).json();
+    const c=d.counters||{};
+    $('#stats').innerHTML=
+      '<div class="stat"><b>'+(c.sent_total??0)+'</b><span>отправлено</span></div>'+
+      '<div class="stat"><b>'+(c.sent_text??0)+'</b><span>текстов</span></div>'+
+      '<div class="stat"><b>'+(c.sent_photo??0)+'</b><span>фото</span></div>'+
+      '<div class="stat"><b>'+(c.sent_video??0)+'</b><span>видео</span></div>'+
+      '<div class="stat"><b>'+(c.retry_count??0)+'</b><span>ретраев</span></div>';
+  }catch(e){console.error(e)}
+}
+
+async function resetStats(){
+  if(!confirm('Обнулить накопленную статистику?'))return;
+  try{
+    const r=await (await fetch('/api/stats/reset',{method:'POST'})).json();
+    if(r.ok){loadStats();refresh();}
+  }catch(e){console.error(e)}
+}
+
+async function retry(id){
+  await fetch('/api/retry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});
+  refresh();
+}
+async function del(id){
+  await fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});
+  refresh();
+}
+
+$('#send').addEventListener('submit',async ev=>{
+  ev.preventDefault();
+  const body={peer:$('#peer').value.trim(),
+              text:$('#text').value.trim()||null,
+              photo:$('#photo').value.trim()||null,
+              video:$('#video').value.trim()||null};
+  const m=$('#msg');
+  try{
+    const r=await (await fetch('/api/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+    if(r.ok){m.className='ok';m.textContent='Поставлено в очередь: '+short(r.task_id);$('#text').value='';$('#photo').value='';$('#video').value='';}
+    else{m.className='err';m.textContent=r.error||'Ошибка';}
+  }catch(e){m.className='err';m.textContent='Ошибка запроса: '+e;}
+  refresh();
+});
+
+refresh();loadStats();setInterval(()=>{refresh();loadStats();},3000);
+</script>
+</body>
+</html>"""
+
 
 class Handler(BaseHTTPRequestHandler):
     def _json(self, code: int, payload: dict) -> None:
@@ -268,35 +490,66 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _serve_page(self) -> None:
+        body = PAGE_HTML.encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
-        if self.path == "/queue":
+        path = self.path.split("?")[0]
+        if path in ("/", "/ui"):
+            self._serve_page()
+        elif path == "/queue":
             self._json(200, {"stats": DB.stats(), "failed": DB.failed()})
+        elif path == "/api/queue":
+            self._json(200, {"stats": DB.stats(), "tasks": DB.tasks(), "failed": DB.failed()})
+        elif path == "/api/stats":
+            self._json(200, {"counters": DB.counters(), "queue": DB.stats()})
+        elif path == "/api/stats/reset" and self.command == "POST":
+            DB.reset_stats()
+            self._json(200, {"ok": True})
         else:
             self._json(404, {"ok": False, "error": "not found"})
 
+    def _handle_send(self, data: dict) -> None:
+        peer = str(data.get("peer", "")).strip()
+        if not peer:
+            self._json(400, {"ok": False, "error": "peer is required"})
+            return
+        text = data.get("text")
+        photo = data.get("photo")
+        video = data.get("video")
+        if not text and not photo and not video:
+            self._json(400, {"ok": False, "error": "text, photo or video required"})
+            return
+        task_id = DB.add(peer, text, photo, video)
+        self._json(200, {"ok": True, "task_id": task_id})
+
     def do_POST(self):
-        if self.path == "/send":
-            try:
-                length = int(self.headers.get("Content-Length", 0))
-                data = json.loads(self.rfile.read(length) or b"{}")
-            except Exception as e:
-                self._json(400, {"ok": False, "error": f"bad json: {e}"})
-                return
-            peer = str(data.get("peer", "")).strip()
-            if not peer:
-                self._json(400, {"ok": False, "error": "peer is required"})
-                return
-            text = data.get("text")
-            photo = data.get("photo")
-            video = data.get("video")
-            if not text and not photo and not video:
-                self._json(400, {"ok": False, "error": "text, photo or video required"})
-                return
-            task_id = DB.add(peer, text, photo, video)
-            self._json(200, {"ok": True, "task_id": task_id})
-        elif self.path == "/flush":
+        path = self.path.split("?")[0]
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            data = json.loads(self.rfile.read(length) or b"{}") if length else {}
+        except Exception as e:
+            self._json(400, {"ok": False, "error": f"bad json: {e}"})
+            return
+        if path in ("/send", "/api/send"):
+            self._handle_send(data)
+        elif path == "/flush":
             n = DB.flush()
             self._json(200, {"ok": True, "deleted": n})
+        elif path == "/api/retry":
+            ok = DB.retry_task(str(data.get("id", "")))
+            self._json(200, {"ok": ok} if ok else {"ok": False, "error": "task not found or not failed"})
+        elif path == "/api/delete":
+            ok = DB.delete_task(str(data.get("id", "")))
+            self._json(200, {"ok": ok} if ok else {"ok": False, "error": "task not found"})
+        elif path == "/api/stats/reset":
+            DB.reset_stats()
+            self._json(200, {"ok": True})
         else:
             self._json(404, {"ok": False, "error": "not found"})
 

@@ -1,5 +1,5 @@
 name: VK Bot
-version: "1.0.0"
+version: "1.1.1"
 slug: vkbot
 description: VK-бот с персистентной очередью сообщений (текст, фото, видео) и HTTP API для автоматизаций Home Assistant
 arch:
@@ -10,6 +10,7 @@ arch:
   - i386
 init: false
 startup: services
+webui: http://[HOST]:[PORT:8099]
 boot: auto
 hassio_api: true
 hassio_role: default
@@ -19,7 +20,7 @@ usb: false
 ports:
   8099/tcp: 8099
 ports_description:
-  8099/tcp: HTTP API бота (POST /send, GET /queue, POST /flush)
+  8099/tcp: Веб-интерфейс и HTTP API бота
 map:
   - share:rw
   - media:rw
