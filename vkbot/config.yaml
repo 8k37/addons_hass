@@ -1,0 +1,39 @@
+name: VK Bot
+version: "1.0.0"
+slug: vkbot
+description: VK-бот с персистентной очередью сообщений (текст, фото, видео) и HTTP API для автоматизаций Home Assistant
+arch:
+  - armhf
+  - armv7
+  - aarch64
+  - amd64
+  - i386
+init: false
+startup: services
+boot: auto
+hassio_api: true
+hassio_role: default
+homeassistant_api: true
+uart: false
+usb: false
+ports:
+  8099/tcp: 8099
+ports_description:
+  8099/tcp: HTTP API бота (POST /send, GET /queue, POST /flush)
+map:
+  - share:rw
+  - media:rw
+options:
+  vk_token: ""
+  api_port: 8099
+  workers: 2
+  retry_limit: 5
+  retry_base_delay: 10
+  log_level: info
+schema:
+  vk_token: str
+  api_port: port?
+  workers: int(1,8)?
+  retry_limit: int(0,20)?
+  retry_base_delay: int(1,120)?
+  log_level: list(trace|debug|info|warning|error|fatal)?

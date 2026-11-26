@@ -1,0 +1,8 @@
+#!/command/with-contenv bashio
+# shellcheck shell=bash
+
+export LOG_LEVEL=$(bashio::config 'log_level' 'info')
+
+bashio::log.info "Starting VK bot..."
+
+exec python3 -u /app/vkbot.py

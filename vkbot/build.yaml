@@ -1,0 +1,9 @@
+---
+build_from:
+  aarch64: ghcr.io/home-assistant/{arch}-base-python:3.12
+  armv7: ghcr.io/home-assistant/{arch}-base-python:3.12
+  armhf: ghcr.io/home-assistant/{arch}-base-python:3.12
+  amd64: ghcr.io/home-assistant/{arch}-base-python:3.12
+  i386: ghcr.io/home-assistant/{arch}-base-python:3.12
+args:
+  LIBRE_VERSION: 24.08

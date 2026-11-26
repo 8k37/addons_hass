@@ -1,0 +1,93 @@
+# VK Bot — аддон для Home Assistant
+
+VK-бот с персистентной очередью отправки сообщений (текст, фото, видео) и HTTP API для вызова из автоматизаций Home Assistant.
+
+## Возможности
+
+- Отправка текста, фото и видео в личные сообщения и беседы VK
+- Персистентная очередь на SQLite: сообщения переживают перезапуск аддона
+- Автоматические ретраи с экспоненциальной задержкой
+- HTTP API для интеграции с HA (порт 8099)
+- Ретраи при flood control VK
+
+## Установка
+
+1. В HA: Настройки → Дополнения → Магазин дополнений → три точки → Репозитории
+2. Добавьте URL этого репозитория (если ещё не добавлен)
+3. Обновите список, найдите «VK Bot» и установите
+4. В конфигурации аддона укажите `vk_token` — токен сообщества VK (права `messages`, `photos`, `video`)
+5. Запустите аддон
+
+## HTTP API
+
+### POST /send
+
+Поставить сообщение в очередь.
+
+```json
+{
+  "peer": "2000000001",
+  "text": "Движение во дворе",
+  "photo": "http://homeassistant.local:8123/local/cam/snapshot.jpg",
+  "video": "/media/cams/clip.mp4"
+}
+```
+
+Ответ:
+
+```json
+{ "ok": true, "task_id": "ab12cd34..." }
+```
+
+### GET /queue
+
+Статистика очереди: `{ "stats": {"pending": 3}, "failed": [...] }`
+
+### POST /flush
+
+Очистить очередь.
+
+## Пример автоматизации HA
+
+`configuration.yaml`:
+
+```yaml
+rest_command:
+  vk_send:
+    url: "http://127.0.0.1:8099/send"
+    method: POST
+    payload: '{"peer": "{{ peer }}", "text": "{{ text }}", "photo": "{{ photo | default(\"\") }}"}'
+    content_type: "application/json"
+```
+
+Автоматизация:
+
+```yaml
+automation:
+  - alias: "VK: уведомление при движении"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.gate_motion
+        to: "on"
+    action:
+      - service: rest_command.vk_send
+        data:
+          peer: "2000000001"
+          text: "Движение у калитки"
+          photo: "http://homeassistant.local:8123/local/cam/snapshot.jpg"
+```
+
+## Опции
+
+| Опция | По умолчанию | Описание |
+|---|---|---|
+| `vk_token` | — | Токен сообщества VK с правами messages, photos, video |
+| `api_port` | 8099 | Порт HTTP API |
+| `workers` | 2 | Число потоков-отправителей (1–8) |
+| `retry_limit` | 5 | Макс. попыток отправки |
+| `retry_base_delay` | 10 | Базовая задержка ретрая, сек (растёт ×2) |
+| `log_level` | info | Уровень логирования |
+
+## Как это работает
+
+Бот хранит очередь в `/data/queue.db` (SQLite). При получении задачи воркер загружает медиа в VK через официальный upload API (`photos.getMessagesUploadServer` / `video.save`), затем отправляет через `messages.send` со случайным `random_id`. При ошибке задача уходит в ретрай с экспоненциальной задержкой; после `retry_limit` попыток задача помечается `failed` и видна в `GET /queue`.
