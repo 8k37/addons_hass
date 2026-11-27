@@ -6,8 +6,6 @@ import logging
 
 import aiohttp
 
-from .const import UPDATE_INTERVAL_SECONDS
-
 _LOGGER = logging.getLogger(__name__)
 
 

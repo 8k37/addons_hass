@@ -17,7 +17,7 @@ _LOGGER = logging.getLogger(__name__)
 
 STEP_USER_SCHEMA = vol.Schema(
     {
-        vol.Required(CONF_URL, default="http://192.168.88.254:8099/api/send"): str,
+        vol.Required(CONF_URL, default="http://192.168.88.254:8099"): str,
         vol.Optional(CONF_PEER, default=""): str,
     }
 )
@@ -25,7 +25,7 @@ STEP_USER_SCHEMA = vol.Schema(
 
 async def validate_input(hass: HomeAssistant, data: dict) -> dict:
     """Validate the user input by probing the API."""
-    url = data[CONF_URL].rsplit("/", 1)[0] if data[CONF_URL].endswith("/api/send") else data[CONF_URL]
+    url = data[CONF_URL]
     client = VKBotApiClient(hass, url)
     try:
         await client.async_get_stats()
