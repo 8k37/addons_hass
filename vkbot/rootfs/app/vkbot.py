@@ -401,14 +401,12 @@ const $=s=>document.querySelector(s);
 function esc(s){return (s??'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function short(s){return s&&s.length>8?s.slice(0,8)+'…':s}
 
-async function refresh(){
-  try{
-    const d=await (await fetch('/api/queue')).json();
-    const st=d.stats||{};
-    $('#qstats').innerHTML=
-      '<div class="stat"><b>'+(st.pending??0)+'</b><span>в очереди</span></div>'+
-      '<div class="stat"><b>'+(st.failed??0)+'</b><span>с ошибками</span></div>';
-    const rows=d.tasks||[];
+function renderQueue(d){
+  const st=d.stats||{};
+  $('#qstats').innerHTML=
+    '<div class="stat"><b>'+(st.pending??0)+'</b><span>в очереди</span></div>'+
+    '<div class="stat"><b>'+(st.failed??0)+'</b><span>с ошибками</span></div>';
+  const rows=d.tasks||[];
     const tb=$('#tbl tbody');tb.innerHTML='';
     rows.forEach(r=>{
       const tr=document.createElement('tr');
@@ -427,20 +425,40 @@ async function refresh(){
       tb.appendChild(tr);
     });
     $('#empty').hidden=rows.length>0;
-  }catch(e){console.error(e)}
 }
 
+function renderStats(c){
+  $('#stats').innerHTML=
+    '<div class="stat"><b>'+(c.sent_total??0)+'</b><span>отправлено</span></div>'+
+    '<div class="stat"><b>'+(c.sent_text??0)+'</b><span>текстов</span></div>'+
+    '<div class="stat"><b>'+(c.sent_photo??0)+'</b><span>фото</span></div>'+
+    '<div class="stat"><b>'+(c.sent_video??0)+'</b><span>видео</span></div>'+
+    '<div class="stat"><b>'+(c.retry_count??0)+'</b><span>ретраев</span></div>';
+}
+
+function applyState(d){
+  renderQueue(d);
+  if(d.counters)renderStats(d.counters);
+}
+
+async function refresh(){
+  try{applyState(await (await fetch('/api/queue')).json());}catch(e){console.error(e)}
+}
 async function loadStats(){
+  try{const d=await (await fetch('/api/stats')).json();renderStats(d.counters||{});}catch(e){console.error(e)}
+}
+
+let pollTimer=null;
+function startPolling(){
+  if(pollTimer)return;
+  pollTimer=setInterval(()=>{refresh();loadStats();},3000);
+}
+function startStream(){
   try{
-    const d=await (await fetch('/api/stats')).json();
-    const c=d.counters||{};
-    $('#stats').innerHTML=
-      '<div class="stat"><b>'+(c.sent_total??0)+'</b><span>отправлено</span></div>'+
-      '<div class="stat"><b>'+(c.sent_text??0)+'</b><span>текстов</span></div>'+
-      '<div class="stat"><b>'+(c.sent_photo??0)+'</b><span>фото</span></div>'+
-      '<div class="stat"><b>'+(c.sent_video??0)+'</b><span>видео</span></div>'+
-      '<div class="stat"><b>'+(c.retry_count??0)+'</b><span>ретраев</span></div>';
-  }catch(e){console.error(e)}
+    const es=new EventSource('/api/events');
+    es.onmessage=ev=>{try{applyState(JSON.parse(ev.data));}catch(e){}};
+    es.onerror=()=>{es.close();startPolling();};
+  }catch(e){startPolling();}
 }
 
 async function resetStats(){
@@ -475,7 +493,7 @@ $('#send').addEventListener('submit',async ev=>{
   refresh();
 });
 
-refresh();loadStats();setInterval(()=>{refresh();loadStats();},3000);
+startStream();refresh();loadStats();
 </script>
 </body>
 </html>"""
@@ -498,10 +516,39 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _sse(self) -> None:
+        """Server-Sent Events: пушим состояние очереди при каждом изменении."""
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.end_headers()
+        last = None
+        try:
+            while not STOP.is_set():
+                payload = json.dumps(
+                    {
+                        "stats": DB.stats(),
+                        "tasks": DB.tasks(),
+                        "failed": DB.failed(),
+                        "counters": DB.counters(),
+                    },
+                    ensure_ascii=False,
+                )
+                if payload != last:
+                    self.wfile.write(f"data: {payload}\n\n".encode())
+                    self.wfile.flush()
+                    last = payload
+                STOP.wait(1.0)
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass  # клиент отключился
+
     def do_GET(self):
         path = self.path.split("?")[0]
         if path in ("/", "/ui"):
             self._serve_page()
+        elif path == "/api/events":
+            self._sse()
         elif path == "/queue":
             self._json(200, {"stats": DB.stats(), "failed": DB.failed()})
         elif path == "/api/queue":
