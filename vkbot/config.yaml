@@ -1,5 +1,5 @@
 name: VK Bot
-version: "1.1.6"
+version: "1.1.7"
 slug: vkbot
 description: VK-бот с персистентной очередью сообщений (текст, фото, видео) и HTTP API для автоматизаций Home Assistant
 arch:
