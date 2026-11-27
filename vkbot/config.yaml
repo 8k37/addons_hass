@@ -10,7 +10,6 @@ arch:
   - i386
 init: false
 startup: services
-webui: "[ENTITY:https://my.home-assistant.io/redirect/panel/]")
 ingress: api
 panel_icon: mdi:message-fast
 panel_title: VK Bot
