@@ -28,7 +28,7 @@ configuration:
     description: If this many triggers in a row leave traffic stalled, nodes are switched blindly without measurement, in round-robin. 0 — disable.
   stall_pre_test_delay_sec:
     name: Pre-test pause (seconds)
-    description: Stall confirmation: after the first seconds without traffic, wait this many more seconds while still watching the traffic. The speed test runs only if it never revives. 0 — disable.
+    description: "Stall confirmation: after the first seconds without traffic, wait this many more seconds while still watching the traffic. The speed test runs only if it never revives. 0 — disable."
   stall_post_switch_delay_sec:
     name: Post-switch pause (seconds)
     description: Give the newly selected node this many seconds to warm up before the watchdog resumes monitoring. 0 — disable.
