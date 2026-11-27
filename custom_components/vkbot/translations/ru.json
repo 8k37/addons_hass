@@ -16,5 +16,29 @@
     "abort": {
       "already_configured": "Этот адрес уже добавлен"
     }
+  },
+  "services": {
+    "send": {
+      "name": "Отправить сообщение",
+      "description": "Отправляет сообщение через аддон VK Bot.",
+      "fields": {
+        "message": {
+          "name": "Сообщение",
+          "description": "Текст сообщения."
+        },
+        "peer": {
+          "name": "Получатель",
+          "description": "ID получателя (peer_id); по умолчанию из настроек интеграции."
+        },
+        "photo": {
+          "name": "Фото",
+          "description": "URL изображения."
+        },
+        "video": {
+          "name": "Видео",
+          "description": "URL видео."
+        }
+      }
+    }
   }
 }

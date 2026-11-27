@@ -24,11 +24,14 @@ class VKBotApiClient:
         """Return {'counters': {...}, 'queue': {...}} from /api/stats."""
         return await self._request("/api/stats")
 
-    async def async_send(self, peer: str, text: str) -> dict:
-        """Send a message via /api/send."""
-        return await self._request(
-            "/api/send", method="post", json={"peer": str(peer), "text": text}
-        )
+    async def async_send(self, peer: str, text: str, photo=None, video=None) -> dict:
+        """Send a message (optionally with media URL) via /api/send."""
+        payload = {"peer": str(peer), "text": text}
+        if photo:
+            payload["photo"] = photo
+        if video:
+            payload["video"] = video
+        return await self._request("/api/send", method="post", json=payload)
 
     async def _request(self, path: str, method: str = "get", json=None) -> dict:
         try:

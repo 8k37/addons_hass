@@ -16,5 +16,29 @@
     "abort": {
       "already_configured": "This address is already added"
     }
+  },
+  "services": {
+    "send": {
+      "name": "Send message",
+      "description": "Sends a message through the VK Bot addon.",
+      "fields": {
+        "message": {
+          "name": "Message",
+          "description": "Text of the message."
+        },
+        "peer": {
+          "name": "Recipient",
+          "description": "Recipient peer_id; defaults to the integration setting."
+        },
+        "photo": {
+          "name": "Photo",
+      "description": "Image URL."
+        },
+        "video": {
+          "name": "Video",
+          "description": "Video URL."
+        }
+      }
+    }
   }
 }

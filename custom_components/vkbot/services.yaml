@@ -1,0 +1,23 @@
+send:
+  name: Отправить сообщение
+  description: Отправляет сообщение через аддон VK Bot.
+  fields:
+    message:
+      name: Сообщение
+      description: Текст сообщения.
+      required: true
+      example: "Дверь открыта"
+    peer:
+      name: Получатель
+      description: >
+        ID получателя (peer_id). Если не указан — берётся получатель из
+        настройки интеграции.
+      example: "16409566"
+    photo:
+      name: Фото
+      description: URL изображения для отправки вместе с сообщением.
+      example: "https://example.com/photo.jpg"
+    video:
+      name: Видео
+      description: URL видео для отправки вместе с сообщением.
+      example: "https://example.com/video.mp4"
