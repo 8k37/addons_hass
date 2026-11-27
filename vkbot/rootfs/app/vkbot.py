@@ -420,8 +420,8 @@ function renderQueue(d){
         '<td><span class="badge '+esc(r.status)+'">'+esc(r.status)+
           (r.next_attempt_in!=null?' · '+r.next_attempt_in+'с':'')+'</span>'+
           (r.error?'<div class="errtext">'+esc(r.error)+'</div>':'')+'</td>'+
-        '<td>'+(r.status==='failed'?'<button class="ghost" onclick="retry(\''+r.id+'\')">повтор</button> ':'')+
-          '<button class="ghost" onclick="del(\''+r.id+'\')">✕</button></td>';
+        '<td>'+(r.status==='failed'?'<button class="ghost" data-act="retry" data-id="'+r.id+'">повтор</button> ':'')+
+          '<button class="ghost" data-act="del" data-id="'+r.id+'">✕</button></td>';
       tb.appendChild(tr);
     });
     $('#empty').hidden=rows.length>0;
@@ -477,6 +477,14 @@ async function del(id){
   await fetch('api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});
   refresh();
 }
+
+document.addEventListener('click',ev=>{
+  const b=ev.target.closest('button[data-act]');
+  if(!b)return;
+  const act=b.dataset.act,id=b.dataset.id;
+  if(act==='retry')retry(id);
+  else if(act==='del')del(id);
+});
 
 $('#send').addEventListener('submit',async ev=>{
   ev.preventDefault();
