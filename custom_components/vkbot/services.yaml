@@ -7,17 +7,26 @@ send:
       description: Текст сообщения.
       required: true
       example: "Дверь открыта"
+      selector:
+        text:
+          multiline: true
     peer:
       name: Получатель
       description: >
         ID получателя (peer_id). Если не указан — берётся получатель из
         настройки интеграции.
       example: "16409566"
+      selector:
+        text:
     photo:
       name: Фото
       description: URL изображения для отправки вместе с сообщением.
       example: "https://example.com/photo.jpg"
+      selector:
+        text:
     video:
       name: Видео
       description: URL видео для отправки вместе с сообщением.
       example: "https://example.com/video.mp4"
+      selector:
+        text:
