@@ -2,6 +2,11 @@
 # shellcheck shell=bash
 
 export LOG_LEVEL=$(bashio::config 'log_level' 'info')
+export VK_TOKEN=$(bashio::config 'vk_token' '')
+export API_PORT=$(bashio::config 'api_port' '8099')
+export WORKERS=$(bashio::config 'workers' '2')
+export RETRY_LIMIT=$(bashio::config 'retry_limit' '5')
+export RETRY_BASE_DELAY=$(bashio::config 'retry_base_delay' '10')
 
 bashio::log.info "Starting VK bot..."
 
