@@ -1,0 +1,20 @@
+{
+  "title": "VK Bot",
+  "config": {
+    "step": {
+      "user": {
+        "data": {
+          "url": "URL API аддона (например http://192.168.88.254:8099)",
+          "peer": "Получатель по умолчанию (peer_id)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Не удалось подключиться к API аддона",
+      "unknown": "Неизвестная ошибка"
+    },
+    "abort": {
+      "already_configured": "Этот адрес уже добавлен"
+    }
+  }
+}
