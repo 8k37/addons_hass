@@ -1,5 +1,5 @@
 name: VK Bot
-version: "1.1.4"
+version: "1.1.5"
 slug: vkbot
 description: VK-бот с персистентной очередью сообщений (текст, фото, видео) и HTTP API для автоматизаций Home Assistant
 arch:
@@ -10,7 +10,11 @@ arch:
   - i386
 init: false
 startup: services
-webui: http://[HOST]:[PORT:8099]
+webui: "[ENTITY:https://my.home-assistant.io/redirect/panel/]")
+ingress: api
+panel_icon: mdi:message-fast
+panel_title: VK Bot
+panel_admin: false
 boot: auto
 hassio_api: true
 hassio_role: default

@@ -361,7 +361,7 @@ button:hover{filter:brightness(1.15)}
 </head>
 <body>
 <h1>VK Bot</h1>
-<div class="sub">Очередь сообщений · автообновление каждые 3 с</div>
+<div class="sub">Очередь сообщений · SSE-стриминг</div>
 
 <div class="card">
   <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
@@ -442,10 +442,10 @@ function applyState(d){
 }
 
 async function refresh(){
-  try{applyState(await (await fetch('/api/queue')).json());}catch(e){console.error(e)}
+  try{applyState(await (await fetch('api/queue')).json());}catch(e){console.error(e)}
 }
 async function loadStats(){
-  try{const d=await (await fetch('/api/stats')).json();renderStats(d.counters||{});}catch(e){console.error(e)}
+  try{const d=await (await fetch('api/stats')).json();renderStats(d.counters||{});}catch(e){console.error(e)}
 }
 
 let pollTimer=null;
@@ -455,7 +455,7 @@ function startPolling(){
 }
 function startStream(){
   try{
-    const es=new EventSource('/api/events');
+    const es=new EventSource('api/events');
     es.onmessage=ev=>{try{applyState(JSON.parse(ev.data));}catch(e){}};
     es.onerror=()=>{es.close();startPolling();};
   }catch(e){startPolling();}
@@ -464,17 +464,17 @@ function startStream(){
 async function resetStats(){
   if(!confirm('Обнулить накопленную статистику?'))return;
   try{
-    const r=await (await fetch('/api/stats/reset',{method:'POST'})).json();
+    const r=await (await fetch('api/stats/reset',{method:'POST'})).json();
     if(r.ok){loadStats();refresh();}
   }catch(e){console.error(e)}
 }
 
 async function retry(id){
-  await fetch('/api/retry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});
+  await fetch('api/retry',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});
   refresh();
 }
 async function del(id){
-  await fetch('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});
+  await fetch('api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:id})});
   refresh();
 }
 
@@ -486,7 +486,7 @@ $('#send').addEventListener('submit',async ev=>{
               video:$('#video').value.trim()||null};
   const m=$('#msg');
   try{
-    const r=await (await fetch('/api/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
+    const r=await (await fetch('api/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})).json();
     if(r.ok){m.className='ok';m.textContent='Поставлено в очередь: '+short(r.task_id);$('#text').value='';$('#photo').value='';$('#video').value='';}
     else{m.className='err';m.textContent=r.error||'Ошибка';}
   }catch(e){m.className='err';m.textContent='Ошибка запроса: '+e;}
